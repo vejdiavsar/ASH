@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Ash — Clark's Harwood Lumber</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #110900;
+  font-family: 'DM Sans', sans-serif;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  height: 100vh; overflow: hidden;
+  color: #FBF0DC;
+}
+.grain {
+  position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background:
+    repeating-linear-gradient(87deg, transparent, transparent 3px, rgba(160,98,42,0.03) 3px, rgba(160,98,42,0.03) 6px),
+    radial-gradient(ellipse at 30% 20%, rgba(80,40,5,0.3) 0%, transparent 60%),
+    linear-gradient(155deg, #160b00 0%, #2a1500 50%, #160a00 100%);
+}
+
+/* ── PORTRAIT ── */
+.portrait-wrap {
+  position: relative; z-index: 2;
+  width: 220px; height: 220px;
+  margin-bottom: 24px;
+}
+.portrait-ring {
+  position: absolute; inset: -8px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(245,200,66,0.25);
+  animation: breathe 3.5s ease-in-out infinite;
+}
+.portrait-ring-2 {
+  position: absolute; inset: -20px;
+  border-radius: 50%;
+  border: 1px solid rgba(245,200,66,0.1);
+  animation: breathe 3.5s ease-in-out infinite 0.8s;
+}
+@keyframes breathe { 0%,100%{transform:scale(1);opacity:.6} 50%{transform:scale(1.02);opacity:1} }
+
+.portrait {
+  width: 100%; height: 100%; border-radius: 50%;
+  overflow: hidden;
+  border: 2px solid rgba(201,150,70,0.5);
+  box-shadow: 0 20px 60px rgba(0,0,0,0.7), 0 0 40px rgba(201,150,70,0.1);
+  background: radial-gradient(circle at 40% 35%, #2d1800, #110900);
+  position: relative;
+}
+
+/* Ripple when listening */
+.ripple-wrap {
+  position: absolute; inset: -16px;
+  border-radius: 50%; pointer-events: none;
+  opacity: 0; transition: opacity 0.4s;
+}
+.ripple-wrap.on { opacity: 1; }
+.rp {
+  position: absolute; inset: 0; border-radius: 50%;
+  border: 2px solid rgba(245,200,66,0.45);
+  animation: rp 1.8s ease-out infinite;
+}
+.rp:nth-child(2){animation-delay:.5s}
+.rp:nth-child(3){animation-delay:1s}
+@keyframes rp { 0%{transform:scale(1);opacity:.7} 100%{transform:scale(1.2);opacity:0} }
+
+/* Speaking bars on portrait */
+.speak-bars {
+  position: absolute; bottom: 20%; left: 50%;
+  transform: translateX(-50%);
+  display: flex; gap: 3px; align-items: center;
+  opacity: 0; transition: opacity 0.3s;
+}
+.speak-bars.on { opacity: 1; }
+.sb { width: 3px; background: rgba(245,200,66,0.85); border-radius: 3px; animation: sb 0.6s ease-in-out infinite; }
+.sb:nth-child(1){height:5px;animation-delay:0s}
+.sb:nth-child(2){height:12px;animation-delay:.1s}
+.sb:nth-child(3){height:18px;animation-delay:.15s}
+.sb:nth-child(4){height:12px;animation-delay:.2s}
+.sb:nth-child(5){height:5px;animation-delay:.3s}
+@keyframes sb { 0%,100%{transform:scaleY(.3);opacity:.5} 50%{transform:scaleY(1);opacity:1} }
+
+/* ── NAME ── */
+.ash-name {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 48px; font-weight: 700;
+  color: #F5C842; letter-spacing: 5px;
+  text-shadow: 0 0 30px rgba(245,200,66,0.2);
+  position: relative; z-index: 2;
+  margin-bottom: 4px;
+}
+.ash-role {
+  font-size: 11px; letter-spacing: 3px;
+  color: rgba(201,150,70,0.5);
+  text-transform: uppercase;
+  position: relative; z-index: 2;
+  margin-bottom: 28px;
+}
+
+/* ── STATUS ── */
+.status {
+  display: flex; align-items: center; gap: 10px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(201,150,70,0.2);
+  border-radius: 50px; padding: 10px 22px;
+  font-size: 13px; color: rgba(253,240,220,0.6);
+  position: relative; z-index: 2;
+  transition: all 0.4s; margin-bottom: 20px;
+}
+.status.listening {
+  border-color: rgba(245,200,66,0.5);
+  background: rgba(245,200,66,0.07);
+  color: #F5C842;
+}
+.status.speaking { border-color: rgba(245,200,66,0.3); color: rgba(253,240,220,0.8); }
+.dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: rgba(201,150,70,0.4);
+  transition: all 0.4s;
+}
+.status.listening .dot { background: #F5C842; box-shadow: 0 0 8px #F5C842; animation: dp 1s ease-in-out infinite; }
+.status.speaking .dot { background: #C9960A; animation: dp 0.5s ease-in-out infinite; }
+@keyframes dp { 0%,100%{opacity:.4;transform:scale(1)} 50%{opacity:1;transform:scale(1.4)} }
+
+/* ── SPEECH BUBBLE ── */
+.bubble {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  padding: 22px 28px 36px;
+  background: linear-gradient(0deg, rgba(17,9,0,0.97) 65%, transparent);
+  transform: translateY(100%); transition: transform 0.5s cubic-bezier(.2,.8,.3,1);
+  z-index: 10;
+}
+.bubble.show { transform: translateY(0); }
+.bubble-label { font-size: 10px; letter-spacing: 3px; color: #C9960A; text-transform: uppercase; margin-bottom: 8px; }
+.bubble-text {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: clamp(18px, 4vw, 24px);
+  color: #FBF0DC; line-height: 1.6; font-style: italic;
+}
+
+/* ── LANG OVERLAY ── */
+#lang-screen {
+  position: fixed; inset: 0; z-index: 20;
+  background: rgba(17,9,0,0.93);
+  display: none; flex-direction: column;
+  align-items: center; justify-content: center; gap: 12px;
+}
+#lang-screen.show { display: flex; }
+.lang-h { font-family: 'Cormorant Garamond', serif; font-size: 28px; color: #F5C842; margin-bottom: 8px; text-align: center; }
+.lang-sub { font-size: 13px; color: rgba(253,240,220,0.4); margin-bottom: 28px; }
+.lang-row { display: flex; gap: 16px; }
+.lb {
+  padding: 18px 32px; border-radius: 14px; border: none;
+  font-family: 'DM Sans', sans-serif; font-size: 16px; font-weight: 500;
+  cursor: pointer; display: flex; flex-direction: column;
+  align-items: center; gap: 6px; transition: all 0.2s;
+}
+.lb:hover { transform: translateY(-3px); filter: brightness(1.3); }
+.lb-en { background: rgba(26,58,107,0.7); border: 1px solid rgba(100,149,237,0.3); color: #fff; }
+.lb-es { background: rgba(107,26,26,0.7); border: 1px solid rgba(237,100,100,0.3); color: #fff; }
+.lf { font-size: 34px; }
+
+/* ── DEBUG ── */
+#dbg {
+  position: fixed; top: 0; left: 0; right: 0;
+  background: rgba(0,0,0,0.8); color: #F5C842;
+  font-size: 12px; font-family: monospace;
+  padding: 6px 14px; z-index: 99;
+  letter-spacing: .5px;
+}
+
+/* ── START BUTTON (first tap unlock) ── */
+#start-btn {
+  position: fixed; inset: 0; z-index: 30;
+  background: rgba(17,9,0,0.85);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 20px;
+  cursor: pointer;
+}
+#start-btn h2 { font-family: 'Cormorant Garamond', serif; font-size: 32px; color: #F5C842; }
+#start-btn p { font-size: 14px; color: rgba(253,240,220,0.5); }
+#start-btn .tap-btn {
+  padding: 18px 48px; background: #F5C842; color: #110900;
+  border: none; border-radius: 50px; font-size: 18px;
+  font-weight: 700; font-family: 'DM Sans', sans-serif;
+  cursor: pointer; margin-top: 10px;
+  box-shadow: 0 8px 30px rgba(245,200,66,0.3);
+}
+
+/* SVG face inside portrait */
+.face-svg { width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<div class="grain"></div>
+<div id="dbg">Starting up...</div>
+
+<!-- FIRST TAP UNLOCK -->
+<div id="start-btn" onclick="unlock()">
+  <h2>ASH</h2>
+  <p>Clark's Harwood Lumber · AI Guide</p>
+  <button class="tap-btn">TAP TO WAKE ASH</button>
+</div>
+
+<!-- MAIN SCREEN -->
+<div class="portrait-wrap">
+  <div class="portrait-ring"></div>
+  <div class="portrait-ring-2"></div>
+  <div class="portrait">
+    <svg class="face-svg" viewBox="0 0 220 220" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <radialGradient id="sg" cx="48%" cy="42%" r="52%">
+          <stop offset="0%" stop-color="#D4956A"/>
+          <stop offset="50%" stop-color="#B06840"/>
+          <stop offset="85%" stop-color="#7A4020"/>
+          <stop offset="100%" stop-color="#4A2010"/>
+        </radialGradient>
+        <radialGradient id="hg" cx="50%" cy="5%" r="60%">
+          <stop offset="0%" stop-color="#3C2410"/>
+          <stop offset="100%" stop-color="#0D0500"/>
+        </radialGradient>
+        <filter id="bl"><feGaussianBlur stdDeviation="2"/></filter>
+      </defs>
+      <!-- bg -->
+      <rect width="220" height="220" fill="#1a0d00"/>
+      <!-- neck -->
+      <path d="M85 175 Q110 185 135 175 L138 220 Q110 228 82 220Z" fill="url(#sg)" opacity=".9"/>
+      <!-- shoulders -->
+      <path d="M0 220 Q40 190 85 178 Q110 185 135 178 Q180 190 220 220Z" fill="#221200"/>
+      <!-- face -->
+      <ellipse cx="110" cy="118" rx="64" ry="74" fill="url(#sg)"/>
+      <!-- cheeks -->
+      <ellipse cx="78" cy="132" rx="14" ry="9" fill="rgba(210,110,70,.18)" filter="url(#bl)"/>
+      <ellipse cx="142" cy="132" rx="14" ry="9" fill="rgba(210,110,70,.18)" filter="url(#bl)"/>
+      <!-- hair -->
+      <path d="M46 108 Q40 60 72 38 Q92 22 110 20 Q128 22 148 38 Q180 60 174 108 Q168 75 155 60 Q136 42 110 40 Q84 42 65 60 Q52 75 46 108Z" fill="url(#hg)"/>
+      <path d="M46 108 Q34 145 40 180 Q48 155 56 138 Q52 118 58 108Z" fill="url(#hg)"/>
+      <path d="M174 108 Q186 145 180 180 Q172 155 164 138 Q168 118 162 108Z" fill="url(#hg)"/>
+      <!-- eyebrows -->
+      <path d="M78 96 Q90 91 102 93" stroke="#3C2010" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+      <path d="M118 93 Q130 91 142 96" stroke="#3C2010" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+      <!-- eyes -->
+      <ellipse cx="90" cy="110" rx="11" ry="7.5" fill="#1A0E06"/>
+      <ellipse cx="90" cy="110" rx="7" ry="5.5" fill="#0D0500"/>
+      <ellipse cx="88" cy="108" rx="2.5" ry="2" fill="rgba(255,255,255,.65)"/>
+      <path d="M79 110 Q90 103 101 110" stroke="#2C1A0A" stroke-width="1.5" fill="none"/>
+      <ellipse cx="130" cy="110" rx="11" ry="7.5" fill="#1A0E06"/>
+      <ellipse cx="130" cy="110" rx="7" ry="5.5" fill="#0D0500"/>
+      <ellipse cx="128" cy="108" rx="2.5" ry="2" fill="rgba(255,255,255,.65)"/>
+      <path d="M119 110 Q130 103 141 110" stroke="#2C1A0A" stroke-width="1.5" fill="none"/>
+      <!-- nose -->
+      <path d="M105 118 Q103 135 100 141 Q106 145 110 144 Q114 145 120 141 Q117 135 115 118" stroke="rgba(90,45,15,.3)" stroke-width="1.2" fill="none"/>
+      <!-- lips -->
+      <path d="M93 155 Q101 150 110 151 Q119 150 127 155 Q119 152 110 153 Q101 152 93 155Z" fill="#8B4A30" opacity=".85"/>
+      <path d="M93 155 Q101 162 110 163 Q119 162 127 155 Q119 160 110 161 Q101 160 93 155Z" fill="#7A3D26" opacity=".9"/>
+      <path d="M101 152 Q110 149 119 152" stroke="rgba(200,110,70,.3)" stroke-width="1" fill="none"/>
+      <!-- earrings -->
+      <circle cx="47" cy="135" r="4" fill="rgba(201,150,70,.7)"/>
+      <circle cx="173" cy="135" r="4" fill="rgba(201,150,70,.7)"/>
+    </svg>
+    <div class="speak-bars" id="speakBars">
+      <div class="sb"></div><div class="sb"></div><div class="sb"></div>
+      <div class="sb"></div><div class="sb"></div>
+    </div>
+  </div>
+  <div class="ripple-wrap" id="ripples">
+    <div class="rp"></div><div class="rp"></div><div class="rp"></div>
+  </div>
+</div>
+
+<div class="ash-name">ASH</div>
+<div class="ash-role">Master Guide · Clark's Harwood Lumber</div>
+
+<div class="status" id="status">
+  <div class="dot"></div>
+  <span id="statusTxt">Waiting for introduction…</span>
+</div>
+
+<!-- SPEECH BUBBLE -->
+<div class="bubble" id="bubble">
+  <div class="bubble-label">Ash</div>
+  <div class="bubble-text" id="bubbleTxt"></div>
+</div>
+
+<!-- LANGUAGE SCREEN -->
+<div id="lang-screen">
+  <div class="lang-h">Choose your language<br><span style="font-size:20px;color:rgba(253,240,220,0.5)">Seleccione su idioma</span></div>
+  <div class="lang-row">
+    <button class="lb lb-en" onclick="pickLang('en')"><span class="lf">🇺🇸</span>English</button>
+    <button class="lb lb-es" onclick="pickLang('es')"><span class="lf">🇲🇽</span>Español</button>
+  </div>
+</div>
+
+<script>
+// ═══ STATE ═══
+let lang = 'en', name = '', appState = 'locked';
+let recog = null, synth = speechSynthesis;
+let voices = [], ashVoice = null;
+let history = [], idleTimer = null;
+
+// ═══ SYSTEM PROMPTS ═══
+const SYS_EN = `You are Ash, master craftsperson guide for Clark's Harwood Lumber Co., Houston TX. You were just introduced to this customer. Speak warmly and naturally like a 30-year veteran who loves wood. Keep responses to 2-3 sentences max — this is a voice conversation. Never use bullet points or lists. Speak like a real person.
+
+STORE: Showroom (Building 1) has reception counter, Titebond glue wall, General Finishes/Osmo/Watco finishes, full Festool tool wall, DML router bits, wood species samples, turning blanks, live edge slabs, edge banding. Warehouse (Building 2, through back door) has all kiln-dried lumber stacked floor to ceiling. Mill Shop (Building 4, blue building across yard) does custom milling, surfacing, ripping, crosscutting — same day.
+PRICES: White Oak $8.50, Red Oak $6.75, Hard Maple $7.25, Black Walnut $14, Cherry $11.50, Poplar $3.50, Hickory $7.50, Ash $6, Cedar $4.75 — all per board foot.
+HOURS: Mon-Fri 7am-5pm, Sat 8am-3pm.`;
+
+const SYS_ES = `Eres Ash, guía maestra de Clark's Harwood Lumber Co., Houston TX. Acabas de ser presentada a este cliente. Habla cálidamente como veterana de 30 años que ama la madera. Máximo 2-3 oraciones — es conversación de voz. Responde SIEMPRE en español.
+TIENDA: Sala exhibición (Edificio 1): mostrador recepción, colas Titebond, acabados General Finishes/Osmo/Watco, herramientas Festool, fresas DML, muestras madera, bloques tornear, tablones en vivo. Almacén (Edificio 2, puerta trasera): madera KD apilada. Taller (Edificio 4, edificio azul): cepillado, corte, entrega mismo día.
+PRECIOS/BF: Roble Blanco $8.50, Roble Rojo $6.75, Arce Duro $7.25, Nogal Negro $14, Cerezo $11.50.`;
+
+// ═══ VOICES ═══
+function loadVoices() {
+  voices = synth.getVoices();
+  const want = ['Samantha','Victoria','Karen','Moira','Google US English','Microsoft Zira','Fiona'];
+  for (let w of want) {
+    const v = voices.find(v => v.name.includes(w));
+    if (v) { ashVoice = v; break; }
+  }
+  if (!ashVoice) ashVoice = voices.find(v => v.lang.startsWith('en') && v.name.toLowerCase().includes('female'))
+                           || voices.find(v => v.lang.startsWith('en')) || voices[0];
+  dbg('Voices loaded. Using: ' + (ashVoice?.name || 'default'));
+}
+synth.onvoiceschanged = loadVoices;
+
+// ═══ SPEAK ═══
+function speak(text, cb) {
+  synth.cancel();
+  setState('speaking');
+  showBubble(text);
+  const u = new SpeechSynthesisUtterance(text);
+  if (lang === 'es') {
+    const ev = voices.find(v => v.lang.startsWith('es'));
+    if (ev) u.voice = ev;
+  } else {
+    if (ashVoice) u.voice = ashVoice;
+  }
+  u.rate = 0.9; u.pitch = 1.08; u.volume = 1;
+  u.onend = u.onerror = () => {
+    hideBubble();
+    if (cb) cb(); else { setState('listening'); startRec(); }
+  };
+  synth.speak(u);
+}
+
+// ═══ RECOGNITION ═══
+function mkRec() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { dbg('❌ No speech recognition'); return null; }
+  const r = new SR();
+  r.continuous = true;
+  r.interimResults = true;
+  r.lang = lang === 'es' ? 'es-MX' : 'en-US';
+  r.maxAlternatives = 3;
+
+  r.onresult = e => {
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) {
+        const t = e.results[i][0].transcript.trim();
+        dbg('🎤 ' + t);
+        handle(t);
+      }
+    }
+  };
+  r.onerror = e => {
+    dbg('⚠️ ' + e.error);
+    if (e.error === 'not-allowed') { dbg('❌ Mic blocked — allow in Chrome'); return; }
+    if (e.error !== 'aborted' && appState !== 'speaking') setTimeout(startRec, 1000);
+  };
+  r.onend = () => {
+    if (appState === 'listening' || appState === 'idle') setTimeout(startRec, 300);
+  };
+  r.onstart = () => dbg('✅ Listening — ' + (appState === 'idle' ? 'say "Hi Ash, this is [name]"' : 'speak to Ash'));
+  return r;
+}
+
+function startRec() {
+  if (appState === 'speaking' || appState === 'thinking' || appState === 'locked') return;
+  try {
+    if (recog) { try { recog.stop(); } catch(e){} }
+    recog = mkRec();
+    if (recog) recog.start();
+  } catch(e) { dbg('rec err: '+e.message); setTimeout(startRec, 1000); }
+}
+
+// ═══ HANDLE SPEECH ═══
+function handle(text) {
+  const lo = text.toLowerCase();
+
+  // IDLE — wait for "Ash" + name
+  if (appState === 'idle') {
+    if (!lo.includes('ash')) return;
+
+    // Extract name
+    let n = null;
+    const m1 = text.match(/this\s+is\s+([A-Za-z]+)/i);
+    if (m1) n = m1[1];
+    const m2 = text.match(/ash[,.\s]+([A-Za-z]+)/i);
+    if (!n && m2 && !['this','is','hi','hey','hello','the','a'].includes(m2[1].toLowerCase())) n = m2[1];
+
+    name = n ? n.charAt(0).toUpperCase() + n.slice(1).toLowerCase() : 'friend';
+    dbg('👤 Customer: ' + name);
+    wakeUp();
+    return;
+  }
+
+  // ACTIVE CONVERSATION
+  if (appState === 'listening') {
+    appState = 'thinking';
+    setState('thinking');
+    history.push({ role: 'user', content: text });
+    askClaude();
+    resetIdle();
+  }
+}
+
+// ═══ WAKE UP ═══
+function wakeUp() {
+  if (recog) { try { recog.stop(); } catch(e){} }
+  appState = 'lang';
+  document.getElementById('lang-screen').classList.add('show');
+  const g = lang === 'en'
+    ? `Hi ${name}! Welcome to Clark's Harwood Lumber. Would you prefer English or Spanish?`
+    : `¡Hola ${name}! Bienvenido a Clark's. ¿Prefiere inglés o español?`;
+  setTimeout(() => speak(g, null), 400);
+}
+
+function pickLang(l) {
+  lang = l;
+  document.getElementById('lang-screen').classList.remove('show');
+  if (recog) { try { recog.stop(); } catch(e){} }
+  const open = lang === 'en'
+    ? `Great! I'm Ash — I know every corner of Clark's from the showroom to the warehouse and our mill shop out back. What are you working on today, ${name}?`
+    : `¡Perfecto! Soy Ash — conozco cada rincón de Clark's. ¿En qué está trabajando hoy, ${name}?`;
+  history = [{ role: 'assistant', content: open }];
+  appState = 'speaking';
+  speak(open, () => { appState = 'listening'; setState('listening'); startRec(); });
+  resetIdle();
+}
+
+// ═══ CLAUDE ═══
+function askClaude() {
+  const sys = lang === 'es' ? SYS_ES : SYS_EN;
+  fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 200,
+      system: sys,
+      messages: history
+    })
+  })
+  .then(r => r.json())
+  .then(d => {
+    const reply = d.content?.map(b => b.text||'').join('')
+      || (lang==='en' ? "Let me grab one of our team members for that!" : "¡Déjeme llamar a un empleado!");
+    history.push({ role: 'assistant', content: reply });
+    appState = 'speaking';
+    speak(reply, () => { appState = 'listening'; setState('listening'); startRec(); });
+  })
+  .catch(() => {
+    const fb = lang==='en' ? "I'm having a quick moment — our team at the counter can help you!" : "Un momento — ¡nuestro equipo puede ayudarle!";
+    appState = 'speaking';
+    speak(fb, () => { appState = 'listening'; setState('listening'); startRec(); });
+  });
+}
+
+// ═══ UI ═══
+function setState(s) {
+  const pill = document.getElementById('status');
+  const txt = document.getElementById('statusTxt');
+  const bars = document.getElementById('speakBars');
+  const rip = document.getElementById('ripples');
+  pill.className = 'status';
+  bars.classList.remove('on');
+  rip.classList.remove('on');
+  if (s === 'speaking') {
+    pill.classList.add('speaking');
+    bars.classList.add('on');
+    txt.textContent = lang==='en' ? 'Speaking…' : 'Hablando…';
+  } else if (s === 'listening') {
+    pill.classList.add('listening');
+    rip.classList.add('on');
+    txt.textContent = lang==='en' ? 'Listening…' : 'Escuchando…';
+  } else if (s === 'thinking') {
+    pill.classList.add('speaking');
+    txt.textContent = lang==='en' ? 'Thinking…' : 'Pensando…';
+  } else {
+    txt.textContent = lang==='en' ? 'Waiting for introduction…' : 'Esperando presentación…';
+  }
+}
+function showBubble(t) {
+  document.getElementById('bubbleTxt').textContent = t;
+  document.getElementById('bubble').classList.add('show');
+}
+function hideBubble() { document.getElementById('bubble').classList.remove('show'); }
+function dbg(m) {
+  console.log(m);
+  document.getElementById('dbg').textContent = m;
+}
+
+// ═══ IDLE RESET ═══
+function resetIdle() {
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    synth.cancel(); history = []; name = '';
+    appState = 'idle'; setState('idle'); hideBubble();
+    document.getElementById('lang-screen').classList.remove('show');
+    startRec();
+  }, 180000);
+}
+
+// ═══ UNLOCK (first tap) ═══
+function unlock() {
+  document.getElementById('start-btn').style.display = 'none';
+  loadVoices();
+  // Play silent audio to unlock audio context
+  const ctx = new AudioContext();
+  const buf = ctx.createBuffer(1,1,22050);
+  const src = ctx.createBufferSource();
+  src.buffer = buf; src.connect(ctx.destination); src.start();
+  appState = 'idle';
+  setState('idle');
+  startRec();
+  dbg('✅ Ash is ready — say "Hi Ash, this is [name]"');
+  resetIdle();
+}
+</script>
+</body>
+</html>
