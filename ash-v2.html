@@ -444,19 +444,20 @@ function pickLang(l) {
 // ═══ CLAUDE ═══
 function askClaude() {
   const sys = lang === 'es' ? SYS_ES : SYS_EN;
-  fetch('https://api.anthropic.com/v1/messages', {
+  fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
       max_tokens: 200,
       system: sys,
-      messages: history
+      messages: history,
+      lang
     })
   })
   .then(r => r.json())
   .then(d => {
-    const reply = d.content?.map(b => b.text||'').join('')
+    const reply = d.reply
+      || d.content?.map(b => b.text||'').join('')
       || (lang==='en' ? "Let me grab one of our team members for that!" : "¡Déjeme llamar a un empleado!");
     history.push({ role: 'assistant', content: reply });
     appState = 'speaking';
