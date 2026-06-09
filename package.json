@@ -5,9 +5,9 @@
   "description": "Phase 1 Ash app for Clark's Harwood Lumber",
   "type": "module",
   "scripts": {
-    "start": "node --use-env-proxy server.js"
+    "start": "node server.js"
   },
   "engines": {
-    "node": ">=24"
+    "node": ">=20"
   }
 }
