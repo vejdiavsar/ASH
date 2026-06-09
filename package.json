@@ -1,0 +1,13 @@
+{
+  "name": "ash-phase-1",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Phase 1 Ash app for Clark's Harwood Lumber",
+  "type": "module",
+  "scripts": {
+    "start": "node --use-env-proxy server.js"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
