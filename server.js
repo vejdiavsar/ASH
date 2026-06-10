@@ -20,6 +20,7 @@ const TAVUS_LLM_MODEL = process.env.TAVUS_LLM_MODEL || 'ash-claude';
 const RENDER_BRAIN_URL = (process.env.ASH_BRAIN_URL || 'https://ash-avsar.onrender.com').replace(/\/$/, '');
 const JAMES_HELP_MESSAGE = 'James help requested.';
 const JAMES_HELP_LOG_MESSAGE = 'Customer requested James.';
+const TAVUS_CLOSING_MESSAGE = 'Ash is still closing the previous conversation. Please wait about one minute and try again.';
 let lastJamesHelpRequest = null;
 
 const CONVERSATION_BEHAVIOR_PROMPT = `Conversation behavior:
@@ -685,6 +686,16 @@ function getTavusErrorMessage(data) {
   return 'Tavus conversation creation failed.';
 }
 
+
+function isTavusMaximumConcurrentError(data) {
+  const message = getTavusErrorMessage(data).toLowerCase();
+  return message.includes('maximum concurrent') || (
+    message.includes('max')
+    && message.includes('concurrent')
+    && message.includes('conversation')
+  );
+}
+
 function getValueType(value) {
   if (Array.isArray(value)) {
     return 'array';
@@ -826,19 +837,35 @@ async function handleTavusConversation(req, res) {
 
     if (!tavusResponse.ok) {
       const message = getTavusErrorMessage(tavusResponse.data);
-      console.error('Tavus error', {
-        statusCode: tavusResponse.status,
-        message,
-        response: sanitizeTavusResponseForLog(tavusResponse.data)
-      });
-      sendJson(res, tavusResponse.status, {
-        error: message,
-        detail: tavusResponse.data
+      const maximumConcurrent = isTavusMaximumConcurrentError(tavusResponse.data);
+      if (maximumConcurrent) {
+        console.warn('Tavus maximum concurrent conversation error detected', {
+          statusCode: tavusResponse.status,
+          response: sanitizeTavusResponseForLog(tavusResponse.data)
+        });
+      } else {
+        console.error('Tavus error', {
+          statusCode: tavusResponse.status,
+          message,
+          response: sanitizeTavusResponseForLog(tavusResponse.data)
+        });
+      }
+      sendJson(res, tavusResponse.status, maximumConcurrent ? {
+        error: TAVUS_CLOSING_MESSAGE,
+        code: 'tavus_previous_conversation_closing'
+      } : {
+        error: 'Ash could not start the video conversation. Please try again in a moment.',
+        code: 'tavus_start_failed'
       });
       return;
     }
 
     const normalizedData = normalizeTavusConversationResponse(tavusResponse.data);
+    console.log('Tavus conversation created', {
+      conversation_id: normalizedData?.conversation_id || null,
+      conversationUrlFound: Boolean(normalizedData?.conversation_url)
+    });
+    console.log('Tavus conversation ID', { conversation_id: normalizedData?.conversation_id || null });
     console.log('Tavus conversation response normalized', {
       conversationUrlFound: Boolean(normalizedData?.conversation_url),
       returnedFields: normalizedData && typeof normalizedData === 'object' ? Object.keys(normalizedData) : [],
@@ -847,7 +874,67 @@ async function handleTavusConversation(req, res) {
     sendJson(res, 200, normalizedData);
   } catch (error) {
     console.error('Tavus error', { message: error.message });
-    sendJson(res, 502, { error: 'Unable to reach Tavus.', detail: error.message });
+    sendJson(res, 502, { error: 'Ash could not start the video conversation. Please try again in a moment.', code: 'tavus_unreachable' });
+  }
+}
+
+
+async function handleTavusConversationEnd(req, res) {
+  const apiKey = getTavusApiKey();
+  if (!apiKey) {
+    sendJson(res, 500, { error: 'TAVUS_API_KEY is not configured.' });
+    return;
+  }
+
+  let body = {};
+  try {
+    const rawBody = await readRequestBody(req);
+    body = rawBody ? JSON.parse(rawBody) : {};
+  } catch {
+    sendJson(res, 400, { error: 'Invalid JSON request body.' });
+    return;
+  }
+
+  const conversationId = typeof body.conversation_id === 'string' ? body.conversation_id.trim() : '';
+  if (!conversationId) {
+    sendJson(res, 400, { error: 'A Tavus conversation_id is required.' });
+    return;
+  }
+
+  console.log('Tavus conversation cleanup attempted', { conversation_id: conversationId });
+
+  try {
+    const tavusResponse = await requestJson(`${TAVUS_API_URL}/conversations/${encodeURIComponent(conversationId)}/end`, {
+      method: 'POST',
+      timeoutMs: TAVUS_TIMEOUT_MS,
+      timeoutLabel: 'Tavus',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey
+      }
+    }, {});
+
+    if (!tavusResponse.ok) {
+      console.warn('Tavus conversation cleanup failed', {
+        statusCode: tavusResponse.status,
+        conversation_id: conversationId,
+        response: sanitizeTavusResponseForLog(tavusResponse.data)
+      });
+      sendJson(res, tavusResponse.status, {
+        ok: false,
+        error: 'Tavus conversation cleanup was not confirmed.'
+      });
+      return;
+    }
+
+    console.log('Tavus conversation cleanup completed', {
+      statusCode: tavusResponse.status,
+      conversation_id: conversationId
+    });
+    sendJson(res, 200, { ok: true, conversation_id: conversationId });
+  } catch (error) {
+    console.warn('Tavus conversation cleanup failed', { conversation_id: conversationId, message: error.message });
+    sendJson(res, 502, { ok: false, error: 'Tavus conversation cleanup was not confirmed.' });
   }
 }
 
@@ -976,6 +1063,11 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === 'POST' && req.url?.startsWith('/api/tavus/conversations/end')) {
+    await handleTavusConversationEnd(req, res);
+    return;
+  }
+
   if (req.method === 'POST' && req.url?.startsWith('/api/tavus/conversations')) {
     await handleTavusConversation(req, res);
     return;
@@ -1015,4 +1107,4 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   });
 }
 
-export { buildTavusConversationPayload, isJamesHelpIntent, normalizeTavusConversationResponse, server };
+export { buildTavusConversationPayload, isJamesHelpIntent, isTavusMaximumConcurrentError, normalizeTavusConversationResponse, server };

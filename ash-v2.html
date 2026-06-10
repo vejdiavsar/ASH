@@ -328,6 +328,11 @@ let lastShownJamesHelpAt = '';
 const TAVUS_START_TIMEOUT_MS = 25000;
 const TAVUS_JOIN_TIMEOUT_MS = 30000;
 const TAVUS_CUSTOMER_NAME = "Clark's Customer";
+const TAVUS_SESSION_KEY = 'ash.tavus.conversation.v1';
+const TAVUS_CLOSING_WAIT_MS = 70000;
+const TAVUS_SESSION_TTL_MS = 30 * 60 * 1000;
+const TAVUS_CLOSING_MESSAGE = 'Ash is still closing the previous conversation. Please wait about one minute and try again.';
+let tavusCleanupStarted = false;
 const JAMES_HELP_REPLY = "Of course. I'll get James for you.";
 const JAMES_HELP_DISPLAY = 'James help requested.';
 
@@ -608,6 +613,139 @@ function getSafeTavusUrlForLog(url) {
   }
 }
 
+
+function readStoredTavusConversation() {
+  try {
+    const raw = sessionStorage.getItem(TAVUS_SESSION_KEY);
+    if (!raw) return null;
+    const stored = JSON.parse(raw);
+    if (!stored || typeof stored !== 'object') return null;
+    return stored;
+  } catch (error) {
+    console.warn('Tavus sessionStorage read failed.', { reason: error?.message || 'read-failed' });
+    return null;
+  }
+}
+
+function writeStoredTavusConversation(conversation) {
+  try {
+    sessionStorage.setItem(TAVUS_SESSION_KEY, JSON.stringify({
+      ...conversation,
+      updatedAt: Date.now()
+    }));
+  } catch (error) {
+    console.warn('Tavus sessionStorage write failed.', { reason: error?.message || 'write-failed' });
+  }
+}
+
+function clearStoredTavusConversation() {
+  try {
+    sessionStorage.removeItem(TAVUS_SESSION_KEY);
+  } catch (error) {
+    console.warn('Tavus sessionStorage clear failed.', { reason: error?.message || 'clear-failed' });
+  }
+}
+
+function getStoredTavusConversationForReuse() {
+  const stored = readStoredTavusConversation();
+  if (!stored?.conversation_url) return null;
+
+  if (stored.status === 'closing' && Number(stored.endingUntil || 0) <= Date.now()) {
+    clearStoredTavusConversation();
+    return null;
+  }
+
+  if (Number(stored.createdAt || 0) && Date.now() - Number(stored.createdAt) > TAVUS_SESSION_TTL_MS) {
+    clearStoredTavusConversation();
+    return null;
+  }
+
+  if (Number(stored.endingUntil || 0) > Date.now()) {
+    console.info('Tavus conversation cleanup wait active.', {
+      conversation_id: stored.conversation_id || null,
+      waitMsRemaining: Number(stored.endingUntil) - Date.now()
+    });
+    showTavusError(TAVUS_CLOSING_MESSAGE);
+    return 'closing';
+  }
+
+  return stored;
+}
+
+function rememberTavusConversation(data, source = 'created') {
+  const conversationUrl = getTavusConversationUrl(data);
+  if (!conversationUrl) return;
+
+  const meetingToken = typeof data.meeting_token === 'string'
+    ? data.meeting_token
+    : (typeof data.token === 'string' ? data.token : '');
+
+  const stored = {
+    conversation_id: typeof data.conversation_id === 'string' ? data.conversation_id : '',
+    conversation_url: conversationUrl,
+    meeting_token: meetingToken,
+    createdAt: Date.now(),
+    status: 'active'
+  };
+  writeStoredTavusConversation(stored);
+  console.info(source === 'reused' ? 'Tavus conversation reused' : 'Tavus conversation created', {
+    conversation_id: stored.conversation_id || null,
+    conversation_url: getSafeTavusUrlForLog(conversationUrl)
+  });
+  if (stored.conversation_id) {
+    console.info('Tavus conversation ID', { conversation_id: stored.conversation_id });
+  }
+}
+
+function markStoredTavusConversationClosing(conversation) {
+  if (!conversation?.conversation_id) return null;
+  const closing = {
+    ...conversation,
+    status: 'closing',
+    cleanupAttemptedAt: Date.now(),
+    endingUntil: Date.now() + TAVUS_CLOSING_WAIT_MS
+  };
+  writeStoredTavusConversation(closing);
+  return closing;
+}
+
+function cleanupTavusConversation(reason = 'page-lifecycle') {
+  if (tavusCleanupStarted) return;
+  const stored = readStoredTavusConversation();
+  if (!stored?.conversation_id || stored.status === 'closing') return;
+  tavusCleanupStarted = true;
+
+  const closing = markStoredTavusConversationClosing(stored);
+  console.info('Tavus conversation cleanup attempted', {
+    conversation_id: stored.conversation_id,
+    reason
+  });
+
+  if (ashCall?.leave) {
+    Promise.resolve(ashCall.leave()).catch(error => {
+      console.warn('Tavus Daily leave before cleanup failed.', { reason: error?.message || 'leave-failed' });
+    });
+  }
+
+  const payload = JSON.stringify({ conversation_id: stored.conversation_id });
+  const blob = new Blob([payload], { type: 'application/json' });
+  if (navigator.sendBeacon && navigator.sendBeacon('/api/tavus/conversations/end', blob)) {
+    return;
+  }
+
+  fetch('/api/tavus/conversations/end', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: payload,
+    keepalive: true
+  }).catch(error => {
+    console.warn('Tavus conversation cleanup request failed.', {
+      conversation_id: closing?.conversation_id || stored.conversation_id,
+      reason: error?.message || 'cleanup-request-failed'
+    });
+  });
+}
+
 function getTavusJoinMode() {
   const mode = new URLSearchParams(window.location.search).get('tavus_mode');
   return mode === 'iframe' || mode === 'redirect' ? mode : 'daily';
@@ -657,7 +795,7 @@ function openTavusConversation(conversationUrl, meetingToken = '') {
   iframe.style.background = '#050200';
 
   const iframeTimeout = setTimeout(() => {
-    showTavusError(`Tavus room iframe did not load within ${Math.round(TAVUS_JOIN_TIMEOUT_MS / 1000)} seconds. Retry the Daily join to enter as ${TAVUS_CUSTOMER_NAME}.`);
+    showTavusError('Ash is taking longer than expected to join. Please try again in a moment.');
     console.warn('Tavus iframe timeout.', {
       conversation_url: safeUrl,
       reason: 'iframe-load-timeout',
@@ -696,7 +834,7 @@ function openTavusConversationWithDaily(conversationUrl, meetingToken = '', safe
   ashCall = null;
 
   if (!window.Daily) {
-    showTavusError(`Daily video library did not load, so Ash cannot automatically enter as ${TAVUS_CUSTOMER_NAME}. Try again when the library is available.`);
+    showTavusError('Ash video is not ready yet. Please try again in a moment.');
     console.warn('Tavus Daily embed failed before join.', { conversation_url: safeUrl, reason: 'daily-js-not-loaded' });
     return;
   }
@@ -720,7 +858,7 @@ function openTavusConversationWithDaily(conversationUrl, meetingToken = '', safe
   });
 
   const joinTimeout = setTimeout(() => {
-    showTavusError(`Tavus Daily room did not emit joined-meeting within ${Math.round(TAVUS_JOIN_TIMEOUT_MS / 1000)} seconds. Retry joining as ${TAVUS_CUSTOMER_NAME}.`);
+    showTavusError('Ash is taking longer than expected to join. Please try again in a moment.');
     console.warn('Tavus Daily join timeout.', {
       conversation_url: safeUrl,
       reason: 'joined-meeting-timeout',
@@ -740,10 +878,13 @@ function openTavusConversationWithDaily(conversationUrl, meetingToken = '', safe
     startJamesHelpPolling();
     dbg('✅ Tavus video connected — Ash is waiting and ready to talk');
   });
+  ashCall.on('left-meeting', () => {
+    cleanupTavusConversation('daily-left-meeting');
+  });
   ashCall.on('error', event => {
     clearTimeout(joinTimeout);
     console.warn('Tavus Daily join error.', { conversation_url: safeUrl, reason: event?.errorMsg || event?.error?.msg || 'daily-error' });
-    showTavusError(event?.errorMsg || event?.error?.msg || 'Daily call failed.');
+    showTavusError('Ash video could not connect. Please try again in a moment.');
   });
 
   const joinOptions = {
@@ -759,7 +900,7 @@ function openTavusConversationWithDaily(conversationUrl, meetingToken = '', safe
   Promise.resolve(ashCall.join(joinOptions)).catch(error => {
     clearTimeout(joinTimeout);
     console.warn('Tavus Daily join rejected.', { conversation_url: safeUrl, reason: error?.message || 'join-rejected' });
-    showTavusError(error?.message || 'Daily call failed to join.');
+    showTavusError('Ash video could not connect. Please try again in a moment.');
   });
 }
 
@@ -782,6 +923,16 @@ function getTavusStartError(data, fallback) {
 function startTavusAsh() {
   document.getElementById('tavus-stage').classList.add('show');
   dbg('Connecting Tavus face and voice…');
+
+  const reusableConversation = getStoredTavusConversationForReuse();
+  if (reusableConversation === 'closing') {
+    return;
+  }
+  if (reusableConversation?.conversation_url) {
+    rememberTavusConversation(reusableConversation, 'reused');
+    openTavusConversation(reusableConversation.conversation_url, reusableConversation.meeting_token || '');
+    return;
+  }
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TAVUS_START_TIMEOUT_MS);
@@ -809,6 +960,7 @@ function startTavusAsh() {
       sourceField: data?.conversation_url ? 'conversation_url' : 'fallback'
     });
 
+    rememberTavusConversation(data, 'created');
     const meetingToken = typeof data.meeting_token === 'string'
       ? data.meeting_token
       : (typeof data.token === 'string' ? data.token : '');
@@ -816,11 +968,22 @@ function startTavusAsh() {
   })
   .catch(error => {
     if (error.name === 'AbortError') {
-      showTavusError(`Tavus start request timed out after ${Math.round(TAVUS_START_TIMEOUT_MS / 1000)} seconds.`);
+      showTavusError('Ash is taking longer than expected to connect. Please try again in a moment.');
       return;
     }
 
-    showTavusError(error.message || 'Tavus request failed.');
+    const message = error.message || 'Tavus request failed.';
+    if (message.toLowerCase().includes('maximum concurrent') || message === TAVUS_CLOSING_MESSAGE) {
+      console.warn('Tavus maximum concurrent conversation error detected');
+      const stored = readStoredTavusConversation();
+      if (stored) {
+        markStoredTavusConversationClosing(stored);
+      }
+      showTavusError(TAVUS_CLOSING_MESSAGE);
+      return;
+    }
+
+    showTavusError('Ash could not start the video conversation. Please try again in a moment.');
   })
   .finally(() => clearTimeout(timeout));
 }
@@ -841,6 +1004,9 @@ function startLegacyAsh() {
   dbg('✅ Browser fallback ready — speak to Ash');
   resetIdle();
 }
+
+window.addEventListener('pagehide', () => cleanupTavusConversation('pagehide'));
+window.addEventListener('beforeunload', () => cleanupTavusConversation('beforeunload'));
 
 // Start Ash immediately. Lori introduces customers in person, so the app never asks for a name.
 document.addEventListener('DOMContentLoaded', () => {

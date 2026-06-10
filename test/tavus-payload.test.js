@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { buildTavusConversationPayload, normalizeTavusConversationResponse } from '../server.js';
+import { buildTavusConversationPayload, isTavusMaximumConcurrentError, normalizeTavusConversationResponse } from '../server.js';
 
 test('Tavus conversation payload omits unsupported prejoin fields', () => {
   const payload = buildTavusConversationPayload({
@@ -116,4 +116,10 @@ test('Tavus conversation response does not invent a token when Tavus omits one',
 
   assert.equal(Object.hasOwn(response, 'meeting_token'), false);
   assert.equal(Object.hasOwn(response, 'token'), false);
+});
+
+
+test('Tavus maximum concurrent conversation errors are detected safely', () => {
+  assert.equal(isTavusMaximumConcurrentError({ message: 'User has reached maximum concurrent conversations.' }), true);
+  assert.equal(isTavusMaximumConcurrentError({ error: { message: 'Invalid conversation_id' } }), false);
 });
