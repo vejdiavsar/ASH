@@ -84,6 +84,31 @@ test('Tavus conversation response normalizes alternate URL field names', () => {
 });
 
 
+
+test('Tavus conversation response records URL source fields and prefers official direct conversation URL', () => {
+  const response = normalizeTavusConversationResponse({
+    conversation_id: 'conversation-6',
+    conversation_url: 'https://tavus.daily.co/direct-conversation',
+    join_url: 'https://tavus.example.com/hosted-join',
+    room_url: 'https://tavus.daily.co/room-url'
+  });
+
+  assert.equal(response.conversation_url, 'https://tavus.daily.co/direct-conversation');
+  assert.equal(response.conversation_url_source, 'conversation_url');
+  assert.deepEqual(response.conversation_url_fields, ['conversation_url', 'room_url', 'join_url']);
+});
+
+test('Tavus conversation response can fall back to join_url without inventing unsupported fields', () => {
+  const response = normalizeTavusConversationResponse({
+    conversation_id: 'conversation-7',
+    join_url: 'https://tavus.example.com/hosted-join'
+  });
+
+  assert.equal(response.conversation_url, 'https://tavus.example.com/hosted-join');
+  assert.equal(response.conversation_url_source, 'join_url');
+  assert.deepEqual(response.conversation_url_fields, ['join_url']);
+});
+
 test('Tavus conversation response preserves only string tokens', () => {
   const response = normalizeTavusConversationResponse({
     conversation_id: 'conversation-3',

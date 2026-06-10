@@ -8,7 +8,7 @@ This app now exposes the two sides of Ash as one flow:
 
 - **Ash's brain** stays in this Render app and uses Claude through Anthropic.
 - **Ash's face and voice** run in Tavus Conversational Video Interface (CVI).
-- The iPad launches the Tavus `conversation_url` and embeds it directly in a full-screen iframe (with a direct-room redirect fallback).
+- The iPad launches the Tavus `conversation_url` through Daily's JavaScript join flow so Ash opens directly without the hosted pre-join screen whenever Tavus/Daily permits it.
 - Tavus calls the app's OpenAI-compatible `/v1/chat/completions` endpoint, which translates the request to Claude and returns Ash's Clark's/woodworking answer.
 
 Default Tavus IDs are baked in for Ash:
@@ -56,8 +56,8 @@ That endpoint patches persona `p3ebb7951fa5` so Tavus uses:
 1. Customer taps **START VIDEO WITH ASH** on the iPad.
 2. Browser calls `POST /api/tavus/conversations`.
 3. Server creates a Tavus CVI conversation with Ash's persona and replica.
-4. Browser embeds the returned Tavus `conversation_url` directly in a full-screen iframe, avoiding the Daily Prebuilt join wrapper that can stall on pre-join.
-5. Tavus handles camera, microphone, STT, Ash's video, and Ash's voice.
+4. Browser selects the best returned Tavus URL field, preferring the official `conversation_url`, and joins it through Daily's JavaScript API with Clark's Customer as the participant name.
+5. Tavus handles the realtime media, STT, Ash's video, and Ash's voice.
 6. Tavus sends chat completions to `/v1/chat/completions`.
 7. This app sends those messages to Claude and returns OpenAI-compatible chat/SSE responses.
 
