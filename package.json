@@ -5,6 +5,7 @@
   "description": "Phase 1 Ash app for Clark's Harwood Lumber",
   "type": "module",
   "scripts": {
+    "test": "node --test",
     "start": "node server.js"
   },
   "engines": {
