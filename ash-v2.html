@@ -212,6 +212,7 @@ body {
     <div class="tavus-error" id="tavus-error">
       <strong>Unable to start Tavus video.</strong>
       <div id="tavus-error-text"></div>
+      <button type="button" onclick="window.openCurrentTavusRoom ? window.openCurrentTavusRoom() : startLegacyAsh()">Open Tavus room directly</button>
       <button type="button" onclick="startLegacyAsh()">Use browser fallback</button>
     </div>
   </div>
@@ -484,14 +485,94 @@ function resetIdle() {
 }
 
 // ═══ TAVUS VIDEO ═══
+function getSafeTavusUrlForLog(url) {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin}${parsed.pathname}${parsed.search ? '?…' : ''}${parsed.hash ? '#…' : ''}`;
+  } catch {
+    return '[invalid-url]';
+  }
+}
+
+function getTavusJoinMode() {
+  const mode = new URLSearchParams(window.location.search).get('tavus_mode');
+  return mode === 'daily' || mode === 'redirect' ? mode : 'iframe';
+}
+
+function redirectToTavusConversation(conversationUrl, reason = 'manual-fallback') {
+  dbg(`↗️ Tavus redirect started (${reason}) with join URL: ${getSafeTavusUrlForLog(conversationUrl)}`);
+  window.location.assign(conversationUrl);
+}
+
 function openTavusConversation(conversationUrl, meetingToken = '') {
   const stage = document.getElementById('tavus-stage');
   const frame = document.getElementById('tavus-frame');
   const loading = document.getElementById('tavus-loading');
+  const mode = getTavusJoinMode();
+  const safeUrl = getSafeTavusUrlForLog(conversationUrl);
   stage.classList.add('show');
+  frame.innerHTML = '';
+  setState('thinking');
+
+  if (typeof meetingToken === 'string' && meetingToken.trim()) {
+    console.info('Tavus meeting token received: present (redacted).');
+  }
+  console.info('Tavus join URL selected for frontend:', { conversation_url: safeUrl, mode });
+
+  if (mode === 'redirect') {
+    console.info('Tavus redirect handoff started.', { conversation_url: safeUrl });
+    redirectToTavusConversation(conversationUrl, 'configured-mode');
+    return;
+  }
+
+  if (mode === 'daily') {
+    openTavusConversationWithDaily(conversationUrl, meetingToken, safeUrl);
+    return;
+  }
+
+  const iframe = document.createElement('iframe');
+  iframe.title = 'Talk with Ash on Tavus';
+  iframe.src = conversationUrl;
+  iframe.allow = 'camera; microphone; fullscreen; display-capture; autoplay';
+  iframe.referrerPolicy = 'strict-origin-when-cross-origin';
+  iframe.style.width = '100%';
+  iframe.style.height = '100%';
+  iframe.style.border = '0';
+  iframe.style.background = '#050200';
+
+  const iframeTimeout = setTimeout(() => {
+    showTavusError(`Tavus room iframe did not load within ${Math.round(TAVUS_JOIN_TIMEOUT_MS / 1000)} seconds. Opening the room directly is available as a fallback.`);
+    console.warn('Tavus iframe timeout.', {
+      conversation_url: safeUrl,
+      reason: 'iframe-load-timeout',
+      timeoutMs: TAVUS_JOIN_TIMEOUT_MS
+    });
+  }, TAVUS_JOIN_TIMEOUT_MS);
+
+  iframe.addEventListener('load', () => {
+    clearTimeout(iframeTimeout);
+    loading.style.display = 'none';
+    appState = 'listening';
+    setState('listening');
+    console.info('Tavus iframe loaded; join completion is handled inside the cross-origin Tavus room.', {
+      conversation_url: safeUrl,
+      joinedEventObservable: false
+    });
+    dbg('✅ Tavus room loaded — tap Join in the Tavus room to talk with Ash');
+  }, { once: true });
+
+  window.openCurrentTavusRoom = () => redirectToTavusConversation(conversationUrl, 'iframe-fallback');
+  frame.appendChild(iframe);
+  console.info('Tavus iframe embed started.', { conversation_url: safeUrl });
+}
+
+function openTavusConversationWithDaily(conversationUrl, meetingToken = '', safeUrl = getSafeTavusUrlForLog(conversationUrl)) {
+  const frame = document.getElementById('tavus-frame');
+  const loading = document.getElementById('tavus-loading');
 
   if (!window.Daily) {
-    showTavusError('Daily video library did not load.');
+    showTavusError('Daily video library did not load. Opening the Tavus room directly is available as a fallback.');
+    console.warn('Tavus Daily embed failed before join.', { conversation_url: safeUrl, reason: 'daily-js-not-loaded' });
     return;
   }
 
@@ -513,22 +594,31 @@ function openTavusConversation(conversationUrl, meetingToken = '') {
   });
 
   const joinTimeout = setTimeout(() => {
-    showTavusError(`Tavus room did not finish joining within ${Math.round(TAVUS_JOIN_TIMEOUT_MS / 1000)} seconds.`);
+    showTavusError(`Tavus Daily room did not emit joined-meeting within ${Math.round(TAVUS_JOIN_TIMEOUT_MS / 1000)} seconds. Opening the room directly is available as a fallback.`);
+    console.warn('Tavus Daily join timeout.', {
+      conversation_url: safeUrl,
+      reason: 'joined-meeting-timeout',
+      timeoutMs: TAVUS_JOIN_TIMEOUT_MS
+    });
   }, TAVUS_JOIN_TIMEOUT_MS);
 
+  ashCall.on('joining-meeting', () => {
+    console.info('Tavus Daily join started.', { conversation_url: safeUrl });
+  });
   ashCall.on('joined-meeting', () => {
     clearTimeout(joinTimeout);
     loading.style.display = 'none';
     appState = 'listening';
     setState('listening');
+    console.info('Tavus Daily join completed.', { conversation_url: safeUrl, joinedEventObservable: true });
     dbg('✅ Tavus video connected — Ash is waiting and ready to talk');
   });
   ashCall.on('error', event => {
     clearTimeout(joinTimeout);
+    console.warn('Tavus Daily join error.', { conversation_url: safeUrl, reason: event?.errorMsg || event?.error?.msg || 'daily-error' });
     showTavusError(event?.errorMsg || event?.error?.msg || 'Daily call failed.');
   });
 
-  setState('thinking');
   const joinOptions = {
     url: conversationUrl,
     userName: "Clark's Customer"
@@ -538,8 +628,10 @@ function openTavusConversation(conversationUrl, meetingToken = '') {
     joinOptions.token = meetingToken;
   }
 
+  console.info('Tavus Daily embed started.', { conversation_url: safeUrl });
   Promise.resolve(ashCall.join(joinOptions)).catch(error => {
     clearTimeout(joinTimeout);
+    console.warn('Tavus Daily join rejected.', { conversation_url: safeUrl, reason: error?.message || 'join-rejected' });
     showTavusError(error?.message || 'Daily call failed to join.');
   });
 }
@@ -584,6 +676,11 @@ function startTavusAsh() {
       const fields = data && typeof data === 'object' ? Object.keys(data).join(', ') : 'none';
       throw new Error(`Tavus did not return a conversation URL. Response fields: ${fields}.`);
     }
+
+    console.info('Tavus conversation URL received from server:', {
+      conversation_url: getSafeTavusUrlForLog(conversationUrl),
+      sourceField: data?.conversation_url ? 'conversation_url' : 'fallback'
+    });
 
     const meetingToken = typeof data.meeting_token === 'string'
       ? data.meeting_token
