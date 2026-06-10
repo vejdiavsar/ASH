@@ -141,6 +141,19 @@ body {
   color: #FBF0DC; line-height: 1.6; font-style: italic;
 }
 
+.james-help-banner {
+  position: fixed; top: 46px; left: 50%;
+  transform: translate(-50%, -140%);
+  z-index: 120;
+  background: rgba(245,200,66,0.95);
+  color: #110900;
+  border-radius: 999px;
+  padding: 14px 24px;
+  font-weight: 700;
+  box-shadow: 0 16px 44px rgba(0,0,0,0.42);
+  transition: transform 0.35s ease;
+}
+.james-help-banner.show { transform: translate(-50%, 0); }
 
 
 /* ── DEBUG ── */
@@ -300,6 +313,7 @@ body {
   <div class="bubble-text" id="bubbleTxt"></div>
 </div>
 
+<div class="james-help-banner" id="james-help-banner" role="status" aria-live="polite">James help requested.</div>
 
 <script crossorigin src="https://unpkg.com/@daily-co/daily-js"></script>
 <script>
@@ -309,20 +323,26 @@ let recog = null, synth = speechSynthesis;
 let voices = [], ashVoice = null;
 let history = [], idleTimer = null;
 let ashCall = null;
+let jamesHelpPollTimer = null;
+let lastShownJamesHelpAt = '';
 const TAVUS_START_TIMEOUT_MS = 25000;
 const TAVUS_JOIN_TIMEOUT_MS = 30000;
 const TAVUS_CUSTOMER_NAME = "Clark's Customer";
+const JAMES_HELP_REPLY = "Of course. I'll get James for you.";
+const JAMES_HELP_DISPLAY = 'James help requested.';
 
 // ═══ SYSTEM PROMPTS ═══
 const SYS_EN = `You are Ash, master craftsperson guide for Clark's Harwood Lumber Co., Houston TX. You were just introduced to this customer. Speak warmly and naturally like a 30-year veteran who loves wood. Keep responses to 2-3 sentences max — this is a voice conversation. Never use bullet points or lists. Speak like a real person.
 
 STORE: Showroom (Building 1) has reception counter, Titebond glue wall, General Finishes/Osmo/Watco finishes, full Festool tool wall, DML router bits, wood species samples, turning blanks, live edge slabs, edge banding. Warehouse (Building 2, through back door) has all kiln-dried lumber stacked floor to ceiling. Mill Shop (Building 4, blue building across yard) does custom milling, surfacing, ripping, crosscutting — same day.
 PRICES: White Oak $8.50, Red Oak $6.75, Hard Maple $7.25, Black Walnut $14, Cherry $11.50, Poplar $3.50, Hickory $7.50, Ash $6, Cedar $4.75 — all per board foot.
-HOURS: Mon-Fri 7am-5pm, Sat 8am-3pm.`;
+HOURS: Mon-Fri 7am-5pm, Sat 8am-3pm.
+BEHAVIOR: Do not ask for permission to record, and do not bring up recording during the sales conversation. At a natural point, ask: "Would you like me to get James to help you?" If the customer asks for James, needs a real person, or says yes to that question, say exactly: "Of course. I'll get James for you."`;
 
 const SYS_ES = `Eres Ash, guía maestra de Clark's Harwood Lumber Co., Houston TX. Acabas de ser presentada a este cliente. Habla cálidamente como veterana de 30 años que ama la madera. Máximo 2-3 oraciones — es conversación de voz. Responde SIEMPRE en español.
 TIENDA: Sala exhibición (Edificio 1): mostrador recepción, colas Titebond, acabados General Finishes/Osmo/Watco, herramientas Festool, fresas DML, muestras madera, bloques tornear, tablones en vivo. Almacén (Edificio 2, puerta trasera): madera KD apilada. Taller (Edificio 4, edificio azul): cepillado, corte, entrega mismo día.
-PRECIOS/BF: Roble Blanco $8.50, Roble Rojo $6.75, Arce Duro $7.25, Nogal Negro $14, Cerezo $11.50.`;
+PRECIOS/BF: Roble Blanco $8.50, Roble Rojo $6.75, Arce Duro $7.25, Nogal Negro $14, Cerezo $11.50.
+COMPORTAMIENTO: No pidas permiso para grabar ni menciones grabación durante la conversación de ventas. En un momento natural, pregunta si quieren que James les ayude. Si el cliente pide a James, necesita una persona real, o dice que sí a esa pregunta, di: "Of course. I'll get James for you."`;
 
 // ═══ VOICES ═══
 function loadVoices() {
@@ -398,9 +418,101 @@ function startRec() {
   } catch(e) { dbg('rec err: '+e.message); setTimeout(startRec, 1000); }
 }
 
+// ═══ JAMES HELP FLOW ═══
+function normalizeIntentText(text = '') {
+  return String(text)
+    .toLowerCase()
+    .replace(/[’']/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function previousAshAskedForJames() {
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const message = history[index];
+    if (message.role === 'user') continue;
+    if (message.role !== 'assistant') continue;
+    return /would\s+you\s+like\s+me\s+to\s+get\s+james\s+to\s+help\s+you/i.test(message.content || '');
+  }
+
+  return false;
+}
+
+function isJamesHelpIntent(text = '') {
+  const normalized = normalizeIntentText(text);
+  if (!normalized) return false;
+
+  const explicitPatterns = [
+    /\bget james\b/,
+    /\bcall james\b/,
+    /\bjames\b.*\b(help|assist|assistance)\b/,
+    /\b(help|assist|assistance)\b.*\bjames\b/,
+    /\bi need help\b/,
+    /\bneed (some )?(real )?(person|human|someone|staff|employee|associate)\b/,
+    /\bcall (someone|somebody|a person|an employee|staff|associate)\b/,
+    /\bget (someone|somebody|a person|an employee|staff|associate)\b/,
+    /\bcan someone help me\b/,
+    /\bcould someone help me\b/,
+    /\bis someone available\b/,
+    /\breal person\b/,
+    /\bhuman help\b/
+  ];
+
+  if (explicitPatterns.some(pattern => pattern.test(normalized))) return true;
+  if (!previousAshAskedForJames()) return false;
+
+  return /^(yes|yes please|yeah|yep|sure|please|please do|that would be great|ok|okay|sounds good|i do|i would|absolutely)\b/.test(normalized);
+}
+
+function showJamesHelpRequested() {
+  const banner = document.getElementById('james-help-banner');
+  banner.textContent = JAMES_HELP_DISPLAY;
+  banner.classList.add('show');
+  setTimeout(() => banner.classList.remove('show'), 7000);
+}
+
+function requestJamesHelp(source = 'browser') {
+  showJamesHelpRequested();
+  console.log('Customer requested James.');
+  return fetch('/api/help/james', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source })
+  }).catch(error => console.warn('Unable to record James help request.', error));
+}
+
+function startJamesHelpPolling() {
+  clearInterval(jamesHelpPollTimer);
+  jamesHelpPollTimer = setInterval(() => {
+    fetch('/api/help/james/status')
+      .then(response => response.json())
+      .then(data => {
+        const createdAt = data?.request?.created_at || '';
+        if (data?.helpRequested && createdAt && createdAt !== lastShownJamesHelpAt) {
+          lastShownJamesHelpAt = createdAt;
+          showJamesHelpRequested();
+        }
+      })
+      .catch(() => {});
+  }, 2500);
+}
+
 // ═══ HANDLE SPEECH ═══
 function handle(text, source = 'voice') {
   if (appState !== 'listening') return;
+
+  if (isJamesHelpIntent(text)) {
+    appState = 'thinking';
+    setState('thinking');
+    history.push({ role: 'user', content: text });
+    history.push({ role: 'assistant', content: JAMES_HELP_REPLY });
+    requestJamesHelp(source);
+    appState = 'speaking';
+    speak(JAMES_HELP_REPLY, () => { appState = 'listening'; setState('listening'); startRec(); });
+    resetIdle();
+    return;
+  }
 
   appState = 'thinking';
   setState('thinking');
@@ -424,6 +536,7 @@ function askClaude() {
   })
   .then(r => r.json())
   .then(d => {
+    if (d.james_help_requested) showJamesHelpRequested();
     const reply = d.reply
       || d.content?.map(b => b.text||'').join('')
       || (lang==='en' ? "Let me grab one of our team members for that!" : "¡Déjeme llamar a un empleado!");
@@ -531,7 +644,7 @@ function openTavusConversation(conversationUrl, meetingToken = '') {
     return;
   }
 
-  console.warn('Tavus iframe mode uses Tavus/Daily's hosted room UI. Prefer Daily mode so Ash can join the customer automatically as Clark's Customer.');
+  console.warn("Tavus iframe mode uses Tavus/Daily's hosted room UI. Prefer Daily mode so Ash can join the customer automatically as Clark's Customer.");
 
   const iframe = document.createElement('iframe');
   iframe.title = 'Talk with Ash on Tavus';
@@ -624,6 +737,7 @@ function openTavusConversationWithDaily(conversationUrl, meetingToken = '', safe
     appState = 'listening';
     setState('listening');
     console.info('Tavus Daily join completed.', { conversation_url: safeUrl, joinedEventObservable: true });
+    startJamesHelpPolling();
     dbg('✅ Tavus video connected — Ash is waiting and ready to talk');
   });
   ashCall.on('error', event => {
@@ -729,7 +843,10 @@ function startLegacyAsh() {
 }
 
 // Start Ash immediately. Lori introduces customers in person, so the app never asks for a name.
-document.addEventListener('DOMContentLoaded', startTavusAsh);
+document.addEventListener('DOMContentLoaded', () => {
+  startJamesHelpPolling();
+  startTavusAsh();
+});
 </script>
 </body>
 </html>
