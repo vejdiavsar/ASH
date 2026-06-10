@@ -529,11 +529,16 @@ function openTavusConversation(conversationUrl, meetingToken = '') {
   });
 
   setState('thinking');
-  Promise.resolve(ashCall.join({
+  const joinOptions = {
     url: conversationUrl,
-    token: meetingToken || undefined,
     userName: "Clark's Customer"
-  })).catch(error => {
+  };
+
+  if (typeof meetingToken === 'string' && meetingToken.trim()) {
+    joinOptions.token = meetingToken;
+  }
+
+  Promise.resolve(ashCall.join(joinOptions)).catch(error => {
     clearTimeout(joinTimeout);
     showTavusError(error?.message || 'Daily call failed to join.');
   });
@@ -580,7 +585,10 @@ function startTavusAsh() {
       throw new Error(`Tavus did not return a conversation URL. Response fields: ${fields}.`);
     }
 
-    openTavusConversation(conversationUrl, data.meeting_token || '');
+    const meetingToken = typeof data.meeting_token === 'string'
+      ? data.meeting_token
+      : (typeof data.token === 'string' ? data.token : '');
+    openTavusConversation(conversationUrl, meetingToken);
   })
   .catch(error => {
     if (error.name === 'AbortError') {

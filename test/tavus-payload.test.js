@@ -41,6 +41,8 @@ test('Tavus conversation payload does not forward unknown top-level or nested fi
     replica_id: 'client-replica',
     persona_id: 'client-persona',
     callback_url: 'https://example.com/wrong-callback',
+    token: { unexpected: true },
+    meeting_token: { unexpected: true },
     properties: {
       enable_prejoin_ui: false,
       participant_left_timeout: 60,
@@ -54,6 +56,8 @@ test('Tavus conversation payload does not forward unknown top-level or nested fi
   assert.equal(Object.hasOwn(payload, 'properties'), false);
   assert.equal(JSON.stringify(payload).includes('enable_prejoin_ui'), false);
   assert.equal(JSON.stringify(payload).includes('participant_left_timeout'), false);
+  assert.equal(Object.hasOwn(payload, 'token'), false);
+  assert.equal(Object.hasOwn(payload, 'meeting_token'), false);
 });
 
 test('Tavus conversation response keeps official conversation_url field', () => {
@@ -74,4 +78,39 @@ test('Tavus conversation response normalizes alternate URL field names', () => {
 
   assert.equal(response.conversation_url, 'https://tavus.daily.co/conversation-2');
   assert.equal(response.daily_room_url, 'https://tavus.daily.co/conversation-2');
+});
+
+
+test('Tavus conversation response preserves only string tokens', () => {
+  const response = normalizeTavusConversationResponse({
+    conversation_id: 'conversation-3',
+    conversation_url: 'https://tavus.daily.co/conversation-3',
+    meeting_token: 'redacted-meeting-token',
+    token: 'redacted-token'
+  });
+
+  assert.equal(response.meeting_token, 'redacted-meeting-token');
+  assert.equal(response.token, 'redacted-token');
+});
+
+test('Tavus conversation response removes object tokens without inventing replacements', () => {
+  const response = normalizeTavusConversationResponse({
+    conversation_id: 'conversation-4',
+    conversation_url: 'https://tavus.daily.co/conversation-4',
+    meeting_token: { value: 'redacted-meeting-token' },
+    token: { value: 'redacted-token' }
+  });
+
+  assert.equal(Object.hasOwn(response, 'meeting_token'), false);
+  assert.equal(Object.hasOwn(response, 'token'), false);
+});
+
+test('Tavus conversation response does not invent a token when Tavus omits one', () => {
+  const response = normalizeTavusConversationResponse({
+    conversation_id: 'conversation-5',
+    conversation_url: 'https://tavus.daily.co/conversation-5'
+  });
+
+  assert.equal(Object.hasOwn(response, 'meeting_token'), false);
+  assert.equal(Object.hasOwn(response, 'token'), false);
 });
