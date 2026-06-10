@@ -12,6 +12,7 @@ const DEFAULT_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
 const ANTHROPIC_KEY_PATTERN = /sk-ant-[A-Za-z0-9_-]+/;
 const MAX_BODY_BYTES = 1024 * 1024;
 const ANTHROPIC_TIMEOUT_MS = 30000;
+const TAVUS_TIMEOUT_MS = 20000;
 const TAVUS_API_URL = 'https://tavusapi.com/v2';
 const TAVUS_PERSONA_ID = process.env.TAVUS_PERSONA_ID || 'p3ebb7951fa5';
 const TAVUS_REPLICA_ID = process.env.TAVUS_REPLICA_ID || 'rdf61be0d4e1';
@@ -144,13 +145,13 @@ function requestJson(url, options, payload) {
   const proxyUrl = getProxyUrl(targetUrl);
 
   if (targetUrl.protocol === 'https:' && proxyUrl) {
-    return requestJsonViaHttpProxy(targetUrl, new URL(proxyUrl), options.method, headers, body);
+    return requestJsonViaHttpProxy(targetUrl, new URL(proxyUrl), options.method, headers, body, options.timeoutMs, options.timeoutLabel);
   }
 
-  return requestJsonDirect(targetUrl, options.method, headers, body);
+  return requestJsonDirect(targetUrl, options.method, headers, body, options.timeoutMs, options.timeoutLabel);
 }
 
-function requestJsonDirect(targetUrl, method, headers, body) {
+function requestJsonDirect(targetUrl, method, headers, body, timeoutMs = ANTHROPIC_TIMEOUT_MS, timeoutLabel = 'Upstream') {
   const transport = targetUrl.protocol === 'https:' ? httpsRequest : httpRequest;
 
   return new Promise((resolve, reject) => {
@@ -161,16 +162,16 @@ function requestJsonDirect(targetUrl, method, headers, body) {
       path: `${targetUrl.pathname}${targetUrl.search}`,
       method,
       headers,
-      timeout: ANTHROPIC_TIMEOUT_MS
+      timeout: timeoutMs
     }, res => collectJsonResponse(res, resolve, reject));
 
-    req.on('timeout', () => req.destroy(new Error('Anthropic request timed out.')));
+    req.on('timeout', () => req.destroy(new Error(`${timeoutLabel} request timed out after ${timeoutMs}ms.`)));
     req.on('error', reject);
     req.end(body);
   });
 }
 
-function requestJsonViaHttpProxy(targetUrl, proxyUrl, method, headers, body) {
+function requestJsonViaHttpProxy(targetUrl, proxyUrl, method, headers, body, timeoutMs = ANTHROPIC_TIMEOUT_MS, timeoutLabel = 'Upstream') {
   return new Promise((resolve, reject) => {
     const proxyReq = httpRequest({
       hostname: proxyUrl.hostname,
@@ -180,7 +181,7 @@ function requestJsonViaHttpProxy(targetUrl, proxyUrl, method, headers, body) {
       headers: proxyUrl.username || proxyUrl.password ? {
         'Proxy-Authorization': `Basic ${Buffer.from(`${decodeURIComponent(proxyUrl.username)}:${decodeURIComponent(proxyUrl.password)}`).toString('base64')}`
       } : undefined,
-      timeout: ANTHROPIC_TIMEOUT_MS
+      timeout: timeoutMs
     });
 
     proxyReq.on('connect', (proxyRes, socket) => {
@@ -198,15 +199,15 @@ function requestJsonViaHttpProxy(targetUrl, proxyUrl, method, headers, body) {
         headers,
         socket,
         servername: targetUrl.hostname,
-        timeout: ANTHROPIC_TIMEOUT_MS
+        timeout: timeoutMs
       }, res => collectJsonResponse(res, resolve, reject));
 
-      req.on('timeout', () => req.destroy(new Error('Anthropic request timed out.')));
+      req.on('timeout', () => req.destroy(new Error(`${timeoutLabel} request timed out after ${timeoutMs}ms.`)));
       req.on('error', reject);
       req.end(body);
     });
 
-    proxyReq.on('timeout', () => proxyReq.destroy(new Error('Proxy CONNECT timed out.')));
+    proxyReq.on('timeout', () => proxyReq.destroy(new Error(`Proxy CONNECT timed out after ${timeoutMs}ms.`)));
     proxyReq.on('error', reject);
     proxyReq.end();
   });
@@ -541,9 +542,86 @@ function buildTavusConversationPayload(body = {}, publicBaseUrl) {
   return payload;
 }
 
+
+function getTavusErrorMessage(data) {
+  if (!data || typeof data !== 'object') {
+    return 'Tavus conversation creation failed.';
+  }
+
+  if (typeof data.message === 'string' && data.message.trim()) {
+    return data.message.trim();
+  }
+
+  if (typeof data.error === 'string' && data.error.trim()) {
+    return data.error.trim();
+  }
+
+  if (typeof data.error?.message === 'string' && data.error.message.trim()) {
+    return data.error.message.trim();
+  }
+
+  if (typeof data.detail === 'string' && data.detail.trim()) {
+    return data.detail.trim();
+  }
+
+  return 'Tavus conversation creation failed.';
+}
+
+function sanitizeTavusResponseForLog(data) {
+  if (!data || typeof data !== 'object') {
+    return { responseType: typeof data };
+  }
+
+  const summary = {
+    fields: Object.keys(data),
+    conversation_id: data.conversation_id || null,
+    conversation_name: data.conversation_name || null,
+    status: data.status || null,
+    conversation_url: data.conversation_url ? 'present' : null,
+    conversationUrl: data.conversationUrl ? 'present' : null,
+    daily_room_url: data.daily_room_url ? 'present' : null,
+    room_url: data.room_url ? 'present' : null,
+    url: data.url ? 'present' : null,
+    meeting_token: data.meeting_token ? 'present' : null,
+    callback_url: data.callback_url ? 'present' : null
+  };
+
+  if (data.error || data.message || data.detail) {
+    summary.error = getTavusErrorMessage(data);
+  }
+
+  return summary;
+}
+
+function normalizeTavusConversationResponse(data = {}) {
+  if (!data || typeof data !== 'object') {
+    return data;
+  }
+
+  const conversationUrl = data.conversation_url
+    || data.conversationUrl
+    || data.daily_room_url
+    || data.room_url
+    || data.url;
+
+  if (!conversationUrl || data.conversation_url) {
+    return data;
+  }
+
+  return { ...data, conversation_url: conversationUrl };
+}
+
 async function handleTavusConversation(req, res) {
   const apiKey = getTavusApiKey();
+  console.log('Tavus start requested', {
+    endpoint: '/api/tavus/conversations',
+    tavusApiKeyExists: Boolean(apiKey),
+    tavusPersonaIdExists: isConfigured(TAVUS_PERSONA_ID),
+    tavusReplicaIdExists: isConfigured(TAVUS_REPLICA_ID)
+  });
+
   if (!apiKey) {
+    console.error('Tavus start failed before API request', { error: 'TAVUS_API_KEY is not configured.' });
     sendJson(res, 500, { error: 'TAVUS_API_KEY is not configured.' });
     return;
   }
@@ -554,6 +632,7 @@ async function handleTavusConversation(req, res) {
       const rawBody = await readRequestBody(req);
       body = rawBody ? JSON.parse(rawBody) : {};
     } catch {
+      console.error('Tavus start failed before API request', { error: 'Invalid JSON request body.' });
       sendJson(res, 400, { error: 'Invalid JSON request body.' });
       return;
     }
@@ -561,26 +640,54 @@ async function handleTavusConversation(req, res) {
 
   const publicBaseUrl = getPublicBaseUrl(req);
   const payload = buildTavusConversationPayload(body, publicBaseUrl);
+  console.log('Tavus conversation request started', {
+    endpoint: `${TAVUS_API_URL}/conversations`,
+    persona_id: payload.persona_id,
+    replica_id: payload.replica_id,
+    callback_url: payload.callback_url,
+    require_auth: payload.require_auth ?? false,
+    test_mode: payload.test_mode ?? false
+  });
 
   try {
     const tavusResponse = await requestJson(`${TAVUS_API_URL}/conversations`, {
       method: 'POST',
+      timeoutMs: TAVUS_TIMEOUT_MS,
+      timeoutLabel: 'Tavus',
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': apiKey
       }
     }, payload);
 
+    console.log('Tavus API response', {
+      statusCode: tavusResponse.status,
+      ok: tavusResponse.ok,
+      response: sanitizeTavusResponseForLog(tavusResponse.data)
+    });
+
     if (!tavusResponse.ok) {
+      const message = getTavusErrorMessage(tavusResponse.data);
+      console.error('Tavus error', {
+        statusCode: tavusResponse.status,
+        message,
+        response: sanitizeTavusResponseForLog(tavusResponse.data)
+      });
       sendJson(res, tavusResponse.status, {
-        error: tavusResponse.data.message || tavusResponse.data.error || 'Tavus conversation creation failed.',
+        error: message,
         detail: tavusResponse.data
       });
       return;
     }
 
-    sendJson(res, 200, tavusResponse.data);
+    const normalizedData = normalizeTavusConversationResponse(tavusResponse.data);
+    console.log('Tavus conversation URL returned', {
+      conversationUrlReturned: Boolean(normalizedData?.conversation_url),
+      fields: normalizedData && typeof normalizedData === 'object' ? Object.keys(normalizedData) : []
+    });
+    sendJson(res, 200, normalizedData);
   } catch (error) {
+    console.error('Tavus error', { message: error.message });
     sendJson(res, 502, { error: 'Unable to reach Tavus.', detail: error.message });
   }
 }
@@ -730,4 +837,4 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   });
 }
 
-export { buildTavusConversationPayload, server };
+export { buildTavusConversationPayload, normalizeTavusConversationResponse, server };

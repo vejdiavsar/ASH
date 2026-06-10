@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { buildTavusConversationPayload } from '../server.js';
+import { buildTavusConversationPayload, normalizeTavusConversationResponse } from '../server.js';
 
 test('Tavus conversation payload omits unsupported prejoin fields', () => {
   const payload = buildTavusConversationPayload({
@@ -54,4 +54,24 @@ test('Tavus conversation payload does not forward unknown top-level or nested fi
   assert.equal(Object.hasOwn(payload, 'properties'), false);
   assert.equal(JSON.stringify(payload).includes('enable_prejoin_ui'), false);
   assert.equal(JSON.stringify(payload).includes('participant_left_timeout'), false);
+});
+
+test('Tavus conversation response keeps official conversation_url field', () => {
+  const response = normalizeTavusConversationResponse({
+    conversation_id: 'conversation-1',
+    conversation_url: 'https://tavus.daily.co/conversation-1',
+    meeting_token: 'redacted-token'
+  });
+
+  assert.equal(response.conversation_url, 'https://tavus.daily.co/conversation-1');
+});
+
+test('Tavus conversation response normalizes alternate URL field names', () => {
+  const response = normalizeTavusConversationResponse({
+    conversation_id: 'conversation-2',
+    daily_room_url: 'https://tavus.daily.co/conversation-2'
+  });
+
+  assert.equal(response.conversation_url, 'https://tavus.daily.co/conversation-2');
+  assert.equal(response.daily_room_url, 'https://tavus.daily.co/conversation-2');
 });

@@ -308,6 +308,8 @@ let recog = null, synth = speechSynthesis;
 let voices = [], ashVoice = null;
 let history = [], idleTimer = null;
 let ashCall = null;
+const TAVUS_START_TIMEOUT_MS = 25000;
+const TAVUS_JOIN_TIMEOUT_MS = 30000;
 
 // ═══ SYSTEM PROMPTS ═══
 const SYS_EN = `You are Ash, master craftsperson guide for Clark's Harwood Lumber Co., Houston TX. You were just introduced to this customer. Speak warmly and naturally like a 30-year veteran who loves wood. Keep responses to 2-3 sentences max — this is a voice conversation. Never use bullet points or lists. Speak like a real person.
@@ -510,48 +512,85 @@ function openTavusConversation(conversationUrl, meetingToken = '') {
     }
   });
 
+  const joinTimeout = setTimeout(() => {
+    showTavusError(`Tavus room did not finish joining within ${Math.round(TAVUS_JOIN_TIMEOUT_MS / 1000)} seconds.`);
+  }, TAVUS_JOIN_TIMEOUT_MS);
+
   ashCall.on('joined-meeting', () => {
+    clearTimeout(joinTimeout);
     loading.style.display = 'none';
     appState = 'listening';
     setState('listening');
     dbg('✅ Tavus video connected — Ash is waiting and ready to talk');
   });
-  ashCall.on('error', event => showTavusError(event?.errorMsg || event?.error?.msg || 'Daily call failed.'));
+  ashCall.on('error', event => {
+    clearTimeout(joinTimeout);
+    showTavusError(event?.errorMsg || event?.error?.msg || 'Daily call failed.');
+  });
 
   setState('thinking');
-  ashCall.join({
+  Promise.resolve(ashCall.join({
     url: conversationUrl,
     token: meetingToken || undefined,
     userName: "Clark's Customer"
+  })).catch(error => {
+    clearTimeout(joinTimeout);
+    showTavusError(error?.message || 'Daily call failed to join.');
   });
 }
 
 function showTavusError(message) {
+  const loading = document.getElementById('tavus-loading');
+  if (loading) loading.style.display = 'flex';
   document.getElementById('tavus-error-text').textContent = message;
   document.getElementById('tavus-error').classList.add('show');
   dbg('⚠️ Tavus unavailable: ' + message);
+}
+
+function getTavusConversationUrl(data) {
+  return data?.conversation_url || data?.conversationUrl || data?.daily_room_url || data?.room_url || data?.url || '';
+}
+
+function getTavusStartError(data, fallback) {
+  return data?.error || data?.message || data?.detail?.message || data?.detail?.error?.message || fallback;
 }
 
 function startTavusAsh() {
   document.getElementById('tavus-stage').classList.add('show');
   dbg('Connecting Tavus face and voice…');
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TAVUS_START_TIMEOUT_MS);
+
   fetch('/api/tavus/conversations', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({})
+    body: JSON.stringify({}),
+    signal: controller.signal
   })
   .then(async response => {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(data.error || data.message || 'Tavus request failed.');
+      throw new Error(getTavusStartError(data, `Tavus request failed with status ${response.status}.`));
     }
-    if (!data.conversation_url) {
-      throw new Error('Tavus did not return a conversation_url.');
+
+    const conversationUrl = getTavusConversationUrl(data);
+    if (!conversationUrl) {
+      const fields = data && typeof data === 'object' ? Object.keys(data).join(', ') : 'none';
+      throw new Error(`Tavus did not return a conversation URL. Response fields: ${fields}.`);
     }
-    openTavusConversation(data.conversation_url, data.meeting_token || '');
+
+    openTavusConversation(conversationUrl, data.meeting_token || '');
   })
-  .catch(error => showTavusError(error.message));
+  .catch(error => {
+    if (error.name === 'AbortError') {
+      showTavusError(`Tavus start request timed out after ${Math.round(TAVUS_START_TIMEOUT_MS / 1000)} seconds.`);
+      return;
+    }
+
+    showTavusError(error.message || 'Tavus request failed.');
+  })
+  .finally(() => clearTimeout(timeout));
 }
 
 function startLegacyAsh() {
