@@ -141,45 +141,7 @@ body {
   color: #FBF0DC; line-height: 1.6; font-style: italic;
 }
 
-/* ── LANG OVERLAY ── */
-#lang-screen {
-  position: fixed; inset: 0; z-index: 20;
-  background: rgba(17,9,0,0.93);
-  display: none; flex-direction: column;
-  align-items: center; justify-content: center; gap: 12px;
-}
-#lang-screen.show { display: flex; }
-.lang-h { font-family: 'Cormorant Garamond', serif; font-size: 28px; color: #F5C842; margin-bottom: 8px; text-align: center; }
-.lang-sub { font-size: 13px; color: rgba(253,240,220,0.4); margin-bottom: 28px; }
-.lang-row { display: flex; gap: 16px; }
-.lang-form { display: flex; gap: 10px; width: min(420px, 86vw); margin-top: 12px; }
-.lang-input {
-  flex: 1; padding: 14px 16px; border-radius: 999px;
-  border: 1px solid rgba(245,200,66,0.28);
-  background: rgba(255,255,255,0.07); color: #FBF0DC;
-  font-family: 'DM Sans', sans-serif; font-size: 16px; outline: none;
-}
-.lang-input::placeholder { color: rgba(253,240,220,0.36); }
-.lang-submit {
-  padding: 14px 20px; border-radius: 999px; border: none;
-  background: #F5C842; color: #110900; font-family: 'DM Sans', sans-serif;
-  font-size: 15px; font-weight: 700; cursor: pointer;
-}
-.heard-feedback {
-  min-height: 20px; margin-top: 4px; color: #F5C842;
-  font-size: 14px; font-weight: 500; letter-spacing: .2px;
-}
 
-.lb {
-  padding: 18px 32px; border-radius: 14px; border: none;
-  font-family: 'DM Sans', sans-serif; font-size: 16px; font-weight: 500;
-  cursor: pointer; display: flex; flex-direction: column;
-  align-items: center; gap: 6px; transition: all 0.2s;
-}
-.lb:hover { transform: translateY(-3px); filter: brightness(1.3); }
-.lb-en { background: rgba(26,58,107,0.7); border: 1px solid rgba(100,149,237,0.3); color: #fff; }
-.lb-es { background: rgba(107,26,26,0.7); border: 1px solid rgba(237,100,100,0.3); color: #fff; }
-.lf { font-size: 34px; }
 
 /* ── DEBUG ── */
 #dbg {
@@ -232,23 +194,6 @@ body {
   font-weight: 700; cursor: pointer;
 }
 
-/* ── START BUTTON (first tap unlock) ── */
-#start-btn {
-  position: fixed; inset: 0; z-index: 30;
-  background: rgba(17,9,0,0.85);
-  display: flex; flex-direction: column;
-  align-items: center; justify-content: center; gap: 20px;
-  cursor: pointer;
-}
-#start-btn h2 { font-family: 'Cormorant Garamond', serif; font-size: 32px; color: #F5C842; }
-#start-btn p { font-size: 14px; color: rgba(253,240,220,0.5); }
-#start-btn .tap-btn {
-  padding: 18px 48px; background: #F5C842; color: #110900;
-  border: none; border-radius: 50px; font-size: 18px;
-  font-weight: 700; font-family: 'DM Sans', sans-serif;
-  cursor: pointer; margin-top: 10px;
-  box-shadow: 0 8px 30px rgba(245,200,66,0.3);
-}
 
 /* SVG face inside portrait */
 .face-svg { width: 100%; height: 100%; }
@@ -270,20 +215,9 @@ body {
       <button type="button" onclick="startLegacyAsh()">Use browser fallback</button>
     </div>
   </div>
-  <iframe
-    class="tavus-frame"
-    id="tavus-frame"
-    title="Talk with Ash"
-    allow="camera; microphone; autoplay; fullscreen; display-capture; clipboard-read; clipboard-write"
-    allowfullscreen></iframe>
+  <div class="tavus-frame" id="tavus-frame" aria-label="Talk with Ash"></div>
 </div>
 
-<!-- FIRST TAP UNLOCK -->
-<div id="start-btn" onclick="unlock()">
-  <h2>ASH</h2>
-  <p>Clark's Harwood Lumber · Tavus Video Guide</p>
-  <button class="tap-btn">START VIDEO WITH ASH</button>
-</div>
 
 <!-- MAIN SCREEN -->
 <div class="portrait-wrap">
@@ -356,7 +290,7 @@ body {
 
 <div class="status" id="status">
   <div class="dot"></div>
-  <span id="statusTxt">Waiting for introduction…</span>
+  <span id="statusTxt">Ready to talk…</span>
 </div>
 
 <!-- SPEECH BUBBLE -->
@@ -365,27 +299,15 @@ body {
   <div class="bubble-text" id="bubbleTxt"></div>
 </div>
 
-<!-- LANGUAGE SCREEN -->
-<div id="lang-screen">
-  <div class="lang-h">Choose your language<br><span style="font-size:20px;color:rgba(253,240,220,0.5)">Seleccione su idioma</span></div>
-  <div class="lang-row">
-    <button class="lb lb-en" type="button" onclick="pickLang('en')"><span class="lf">🇺🇸</span>English</button>
-    <button class="lb lb-es" type="button" onclick="pickLang('es')"><span class="lf">🇲🇽</span>Español</button>
-  </div>
-  <form class="lang-form" id="lang-form" autocomplete="off">
-    <input class="lang-input" id="lang-input" type="text" inputmode="text" placeholder="Type English or Spanish" aria-label="Type English or Spanish">
-    <button class="lang-submit" type="submit">Continue</button>
-  </form>
-  <div class="heard-feedback" id="heard-feedback" aria-live="polite"></div>
-</div>
 
+<script crossorigin src="https://unpkg.com/@daily-co/daily-js"></script>
 <script>
 // ═══ STATE ═══
-let lang = 'en', name = '', appState = 'locked';
+let lang = 'en', appState = 'connecting';
 let recog = null, synth = speechSynthesis;
 let voices = [], ashVoice = null;
 let history = [], idleTimer = null;
-let languageChosen = false;
+let ashCall = null;
 
 // ═══ SYSTEM PROMPTS ═══
 const SYS_EN = `You are Ash, master craftsperson guide for Clark's Harwood Lumber Co., Houston TX. You were just introduced to this customer. Speak warmly and naturally like a 30-year veteran who loves wood. Keep responses to 2-3 sentences max — this is a voice conversation. Never use bullet points or lists. Speak like a real person.
@@ -457,14 +379,14 @@ function mkRec() {
     if (e.error !== 'aborted' && appState !== 'speaking') setTimeout(startRec, 1000);
   };
   r.onend = () => {
-    if (appState === 'listening' || appState === 'idle' || appState === 'lang') setTimeout(startRec, 300);
+    if (appState === 'listening') setTimeout(startRec, 300);
   };
-  r.onstart = () => dbg('✅ Listening — ' + (appState === 'idle' ? 'say "Hi Ash, this is [name]"' : 'speak to Ash'));
+  r.onstart = () => dbg('✅ Listening — speak to Ash');
   return r;
 }
 
 function startRec() {
-  if (appState === 'speaking' || appState === 'thinking' || appState === 'locked') return;
+  if (appState === 'speaking' || appState === 'thinking' || appState === 'connecting') return;
   try {
     if (recog) { try { recog.stop(); } catch(e){} }
     recog = mkRec();
@@ -474,111 +396,12 @@ function startRec() {
 
 // ═══ HANDLE SPEECH ═══
 function handle(text, source = 'voice') {
-  const lo = normalizeAnswer(text);
+  if (appState !== 'listening') return;
 
-  // IDLE — wait for "Ash" + name
-  if (appState === 'idle') {
-    if (!lo.includes('ash')) return;
-
-    // Extract name
-    let n = null;
-    const m1 = text.match(/this\s+is\s+([A-Za-z]+)/i);
-    if (m1) n = m1[1];
-    const m2 = text.match(/ash[,.\s]+([A-Za-z]+)/i);
-    if (!n && m2 && !['this','is','hi','hey','hello','the','a'].includes(m2[1].toLowerCase())) n = m2[1];
-
-    name = n ? n.charAt(0).toUpperCase() + n.slice(1).toLowerCase() : 'friend';
-    dbg('👤 Customer: ' + name);
-    wakeUp();
-    return;
-  }
-
-  // LANGUAGE QUESTION — verbal and typed answers use the same internal picker as buttons
-  if (appState === 'lang') {
-    handleLanguageAnswer(text, source);
-    return;
-  }
-
-  // ACTIVE CONVERSATION
-  if (appState === 'listening') {
-    appState = 'thinking';
-    setState('thinking');
-    history.push({ role: 'user', content: text });
-    askClaude();
-    resetIdle();
-  }
-}
-
-// ═══ WAKE UP ═══
-function wakeUp() {
-  if (recog) { try { recog.stop(); } catch(e){} }
-  languageChosen = false;
-  appState = 'speaking';
-  document.getElementById('heard-feedback').textContent = '';
-  document.getElementById('lang-input').value = '';
-  document.getElementById('lang-screen').classList.add('show');
-  const g = lang === 'en'
-    ? `Hi ${name}! Welcome to Clark's Harwood Lumber. Would you prefer English or Spanish?`
-    : `¡Hola ${name}! Bienvenido a Clark's. ¿Prefiere inglés o español?`;
-  setTimeout(() => speak(g, () => {
-    if (languageChosen) return;
-    appState = 'lang';
-    setState('listening');
-    startRec();
-    document.getElementById('lang-input').focus();
-  }), 400);
-}
-
-function normalizeAnswer(text) {
-  return text
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-zñ ]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function parseLanguageAnswer(text) {
-  const lo = normalizeAnswer(text);
-  if (/\b(en|english|ingles)\b/.test(lo)) return 'en';
-  if (/\b(es|spanish|espanol|español)\b/.test(lo)) return 'es';
-  return '';
-}
-
-function languageLabel(l) {
-  return l === 'es' ? 'Spanish' : 'English';
-}
-
-function showHeardLanguage(l) {
-  const heard = `I heard: ${languageLabel(l)}`;
-  document.getElementById('heard-feedback').textContent = heard;
-  dbg(heard);
-}
-
-function handleLanguageAnswer(text, source = 'voice') {
-  const selected = parseLanguageAnswer(text);
-  if (!selected) return;
-  chooseLanguage(selected, source, text);
-}
-
-function pickLang(l) {
-  chooseLanguage(l, 'button', languageLabel(l));
-}
-
-function chooseLanguage(l, source = 'button', heardText = '') {
-  if (languageChosen) return;
-  languageChosen = true;
-  lang = l;
-  showHeardLanguage(l);
-  document.getElementById('lang-screen').classList.remove('show');
-  if (recog) { try { recog.stop(); } catch(e){} }
-  const open = lang === 'en'
-    ? `Great! I'm Ash — I know every corner of Clark's from the showroom to the warehouse and our mill shop out back. What are you working on today, ${name}?`
-    : `¡Perfecto! Soy Ash — conozco cada rincón de Clark's. ¿En qué está trabajando hoy, ${name}?`;
-  history = [{ role: 'assistant', content: open }];
-  appState = 'speaking';
-  speak(open, () => { appState = 'listening'; setState('listening'); startRec(); });
+  appState = 'thinking';
+  setState('thinking');
+  history.push({ role: 'user', content: text });
+  askClaude();
   resetIdle();
 }
 
@@ -632,7 +455,7 @@ function setState(s) {
     pill.classList.add('speaking');
     txt.textContent = lang==='en' ? 'Thinking…' : 'Pensando…';
   } else {
-    txt.textContent = lang==='en' ? 'Waiting for introduction…' : 'Esperando presentación…';
+    txt.textContent = 'Ready to talk…';
   }
 }
 function showBubble(t) {
@@ -649,26 +472,58 @@ function dbg(m) {
 function resetIdle() {
   clearTimeout(idleTimer);
   idleTimer = setTimeout(() => {
-    synth.cancel(); history = []; name = ''; languageChosen = false;
-    appState = 'idle'; setState('idle'); hideBubble();
-    document.getElementById('heard-feedback').textContent = '';
-    document.getElementById('lang-screen').classList.remove('show');
+    synth.cancel();
+    history = [];
+    appState = 'listening';
+    setState('listening');
+    hideBubble();
     startRec();
   }, 180000);
 }
 
 // ═══ TAVUS VIDEO ═══
-function openTavusConversation(conversationUrl) {
+function openTavusConversation(conversationUrl, meetingToken = '') {
   const stage = document.getElementById('tavus-stage');
   const frame = document.getElementById('tavus-frame');
   const loading = document.getElementById('tavus-loading');
-  frame.src = conversationUrl;
   stage.classList.add('show');
-  setState('speaking');
-  dbg('✅ Tavus video connected — Ash face and voice are live');
-  frame.addEventListener('load', () => {
+
+  if (!window.Daily) {
+    showTavusError('Daily video library did not load.');
+    return;
+  }
+
+  ashCall = window.Daily.createFrame(frame, {
+    showLeaveButton: false,
+    showFullscreenButton: true,
+    iframeStyle: {
+      width: '100%',
+      height: '100%',
+      border: '0'
+    },
+    theme: {
+      colors: {
+        accent: '#F5C842',
+        background: '#110900',
+        baseText: '#FBF0DC'
+      }
+    }
+  });
+
+  ashCall.on('joined-meeting', () => {
     loading.style.display = 'none';
-  }, { once: true });
+    appState = 'listening';
+    setState('listening');
+    dbg('✅ Tavus video connected — Ash is waiting and ready to talk');
+  });
+  ashCall.on('error', event => showTavusError(event?.errorMsg || event?.error?.msg || 'Daily call failed.'));
+
+  setState('thinking');
+  ashCall.join({
+    url: conversationUrl,
+    token: meetingToken || undefined,
+    userName: "Clark's Customer"
+  });
 }
 
 function showTavusError(message) {
@@ -678,7 +533,6 @@ function showTavusError(message) {
 }
 
 function startTavusAsh() {
-  document.getElementById('start-btn').style.display = 'none';
   document.getElementById('tavus-stage').classList.add('show');
   dbg('Connecting Tavus face and voice…');
 
@@ -695,7 +549,7 @@ function startTavusAsh() {
     if (!data.conversation_url) {
       throw new Error('Tavus did not return a conversation_url.');
     }
-    openTavusConversation(data.conversation_url);
+    openTavusConversation(data.conversation_url, data.meeting_token || '');
   })
   .catch(error => showTavusError(error.message));
 }
@@ -710,23 +564,15 @@ function startLegacyAsh() {
     const src = ctx.createBufferSource();
     src.buffer = buf; src.connect(ctx.destination); src.start();
   } catch(e) {}
-  appState = 'idle';
-  setState('idle');
+  appState = 'listening';
+  setState('listening');
   startRec();
-  dbg('✅ Browser fallback ready — say "Hi Ash, this is [name]"');
+  dbg('✅ Browser fallback ready — speak to Ash');
   resetIdle();
 }
 
-// ═══ UNLOCK (first tap) ═══
-function unlock() {
-  startTavusAsh();
-}
-
-document.getElementById('lang-form').addEventListener('submit', event => {
-  event.preventDefault();
-  const typed = document.getElementById('lang-input').value;
-  handleLanguageAnswer(typed, 'typed');
-});
+// Start Ash immediately. Lori introduces customers in person, so the app never asks for a name.
+document.addEventListener('DOMContentLoaded', startTavusAsh);
 </script>
 </body>
 </html>

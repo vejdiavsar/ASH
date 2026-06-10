@@ -515,6 +515,7 @@ async function handleTavusConversation(req, res) {
     conversational_context: body.conversational_context || "You are Ash for Clark's Hardwood Lumber. Use the Claude-powered Render brain configured on this persona for woodworking and Clark's store knowledge.",
     properties: {
       ...(body.properties || {}),
+      enable_prejoin_ui: body.properties?.enable_prejoin_ui ?? false,
       participant_left_timeout: body.properties?.participant_left_timeout || 60
     }
   };
