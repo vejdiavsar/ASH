@@ -2,7 +2,7 @@ import { createReadStream, existsSync } from 'node:fs';
 import { createServer, request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { extname, join, normalize } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
@@ -487,6 +487,39 @@ function getTavusApiKey() {
   return (process.env.TAVUS_API_KEY || '').trim();
 }
 
+function buildTavusConversationPayload(body = {}, publicBaseUrl) {
+  const payload = {
+    replica_id: TAVUS_REPLICA_ID,
+    persona_id: TAVUS_PERSONA_ID,
+    conversation_name: body.conversation_name || `Ash at Clark's ${new Date().toISOString()}`,
+    callback_url: `${publicBaseUrl}/api/tavus/callback`,
+    custom_greeting: body.custom_greeting || "Hi, I'm Ash. Welcome to Clark's Hardwood Lumber. What are you working on today?",
+    conversational_context: body.conversational_context || "You are Ash for Clark's Hardwood Lumber. Use the Claude-powered Render brain configured on this persona for woodworking and Clark's store knowledge."
+  };
+
+  if (typeof body.audio_only === 'boolean') {
+    payload.audio_only = body.audio_only;
+  }
+
+  if (typeof body.test_mode === 'boolean') {
+    payload.test_mode = body.test_mode;
+  }
+
+  if (typeof body.require_auth === 'boolean') {
+    payload.require_auth = body.require_auth;
+  }
+
+  if (Number.isInteger(body.max_participants) && body.max_participants >= 2) {
+    payload.max_participants = body.max_participants;
+  }
+
+  if (typeof body.properties?.language === 'string' && body.properties.language.trim()) {
+    payload.properties = { language: body.properties.language.trim() };
+  }
+
+  return payload;
+}
+
 async function handleTavusConversation(req, res) {
   const apiKey = getTavusApiKey();
   if (!apiKey) {
@@ -506,19 +539,7 @@ async function handleTavusConversation(req, res) {
   }
 
   const publicBaseUrl = getPublicBaseUrl(req);
-  const payload = {
-    replica_id: body.replica_id || TAVUS_REPLICA_ID,
-    persona_id: body.persona_id || TAVUS_PERSONA_ID,
-    conversation_name: body.conversation_name || `Ash at Clark's ${new Date().toISOString()}`,
-    callback_url: body.callback_url || `${publicBaseUrl}/api/tavus/callback`,
-    custom_greeting: body.custom_greeting || "Hi, I'm Ash. Welcome to Clark's Hardwood Lumber. What are you working on today?",
-    conversational_context: body.conversational_context || "You are Ash for Clark's Hardwood Lumber. Use the Claude-powered Render brain configured on this persona for woodworking and Clark's store knowledge.",
-    properties: {
-      ...(body.properties || {}),
-      enable_prejoin_ui: body.properties?.enable_prejoin_ui ?? false,
-      participant_left_timeout: body.properties?.participant_left_timeout || 60
-    }
-  };
+  const payload = buildTavusConversationPayload(body, publicBaseUrl);
 
   try {
     const tavusResponse = await requestJson(`${TAVUS_API_URL}/conversations`, {
@@ -682,6 +703,10 @@ const server = createServer(async (req, res) => {
   sendJson(res, 405, { error: 'Method not allowed.' });
 });
 
-server.listen(PORT, () => {
-  console.log(`Ash Phase 1 server listening on http://localhost:${PORT}`);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  server.listen(PORT, () => {
+    console.log(`Ash Phase 1 server listening on http://localhost:${PORT}`);
+  });
+}
+
+export { buildTavusConversationPayload, server };
