@@ -152,6 +152,24 @@ body {
 .lang-h { font-family: 'Cormorant Garamond', serif; font-size: 28px; color: #F5C842; margin-bottom: 8px; text-align: center; }
 .lang-sub { font-size: 13px; color: rgba(253,240,220,0.4); margin-bottom: 28px; }
 .lang-row { display: flex; gap: 16px; }
+.lang-form { display: flex; gap: 10px; width: min(420px, 86vw); margin-top: 12px; }
+.lang-input {
+  flex: 1; padding: 14px 16px; border-radius: 999px;
+  border: 1px solid rgba(245,200,66,0.28);
+  background: rgba(255,255,255,0.07); color: #FBF0DC;
+  font-family: 'DM Sans', sans-serif; font-size: 16px; outline: none;
+}
+.lang-input::placeholder { color: rgba(253,240,220,0.36); }
+.lang-submit {
+  padding: 14px 20px; border-radius: 999px; border: none;
+  background: #F5C842; color: #110900; font-family: 'DM Sans', sans-serif;
+  font-size: 15px; font-weight: 700; cursor: pointer;
+}
+.heard-feedback {
+  min-height: 20px; margin-top: 4px; color: #F5C842;
+  font-size: 14px; font-weight: 500; letter-spacing: .2px;
+}
+
 .lb {
   padding: 18px 32px; border-radius: 14px; border: none;
   font-family: 'DM Sans', sans-serif; font-size: 16px; font-weight: 500;
@@ -289,9 +307,14 @@ body {
 <div id="lang-screen">
   <div class="lang-h">Choose your language<br><span style="font-size:20px;color:rgba(253,240,220,0.5)">Seleccione su idioma</span></div>
   <div class="lang-row">
-    <button class="lb lb-en" onclick="pickLang('en')"><span class="lf">🇺🇸</span>English</button>
-    <button class="lb lb-es" onclick="pickLang('es')"><span class="lf">🇲🇽</span>Español</button>
+    <button class="lb lb-en" type="button" onclick="pickLang('en')"><span class="lf">🇺🇸</span>English</button>
+    <button class="lb lb-es" type="button" onclick="pickLang('es')"><span class="lf">🇲🇽</span>Español</button>
   </div>
+  <form class="lang-form" id="lang-form" autocomplete="off">
+    <input class="lang-input" id="lang-input" type="text" inputmode="text" placeholder="Type English or Spanish" aria-label="Type English or Spanish">
+    <button class="lang-submit" type="submit">Continue</button>
+  </form>
+  <div class="heard-feedback" id="heard-feedback" aria-live="polite"></div>
 </div>
 
 <script>
@@ -300,6 +323,7 @@ let lang = 'en', name = '', appState = 'locked';
 let recog = null, synth = speechSynthesis;
 let voices = [], ashVoice = null;
 let history = [], idleTimer = null;
+let languageChosen = false;
 
 // ═══ SYSTEM PROMPTS ═══
 const SYS_EN = `You are Ash, master craftsperson guide for Clark's Harwood Lumber Co., Houston TX. You were just introduced to this customer. Speak warmly and naturally like a 30-year veteran who loves wood. Keep responses to 2-3 sentences max — this is a voice conversation. Never use bullet points or lists. Speak like a real person.
@@ -361,7 +385,7 @@ function mkRec() {
       if (e.results[i].isFinal) {
         const t = e.results[i][0].transcript.trim();
         dbg('🎤 ' + t);
-        handle(t);
+        handle(t, 'voice');
       }
     }
   };
@@ -371,7 +395,7 @@ function mkRec() {
     if (e.error !== 'aborted' && appState !== 'speaking') setTimeout(startRec, 1000);
   };
   r.onend = () => {
-    if (appState === 'listening' || appState === 'idle') setTimeout(startRec, 300);
+    if (appState === 'listening' || appState === 'idle' || appState === 'lang') setTimeout(startRec, 300);
   };
   r.onstart = () => dbg('✅ Listening — ' + (appState === 'idle' ? 'say "Hi Ash, this is [name]"' : 'speak to Ash'));
   return r;
@@ -387,8 +411,8 @@ function startRec() {
 }
 
 // ═══ HANDLE SPEECH ═══
-function handle(text) {
-  const lo = text.toLowerCase();
+function handle(text, source = 'voice') {
+  const lo = normalizeAnswer(text);
 
   // IDLE — wait for "Ash" + name
   if (appState === 'idle') {
@@ -407,6 +431,12 @@ function handle(text) {
     return;
   }
 
+  // LANGUAGE QUESTION — verbal and typed answers use the same internal picker as buttons
+  if (appState === 'lang') {
+    handleLanguageAnswer(text, source);
+    return;
+  }
+
   // ACTIVE CONVERSATION
   if (appState === 'listening') {
     appState = 'thinking';
@@ -420,16 +450,65 @@ function handle(text) {
 // ═══ WAKE UP ═══
 function wakeUp() {
   if (recog) { try { recog.stop(); } catch(e){} }
-  appState = 'lang';
+  languageChosen = false;
+  appState = 'speaking';
+  document.getElementById('heard-feedback').textContent = '';
+  document.getElementById('lang-input').value = '';
   document.getElementById('lang-screen').classList.add('show');
   const g = lang === 'en'
     ? `Hi ${name}! Welcome to Clark's Harwood Lumber. Would you prefer English or Spanish?`
     : `¡Hola ${name}! Bienvenido a Clark's. ¿Prefiere inglés o español?`;
-  setTimeout(() => speak(g, null), 400);
+  setTimeout(() => speak(g, () => {
+    if (languageChosen) return;
+    appState = 'lang';
+    setState('listening');
+    startRec();
+    document.getElementById('lang-input').focus();
+  }), 400);
+}
+
+function normalizeAnswer(text) {
+  return text
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zñ ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function parseLanguageAnswer(text) {
+  const lo = normalizeAnswer(text);
+  if (/\b(en|english|ingles)\b/.test(lo)) return 'en';
+  if (/\b(es|spanish|espanol|español)\b/.test(lo)) return 'es';
+  return '';
+}
+
+function languageLabel(l) {
+  return l === 'es' ? 'Spanish' : 'English';
+}
+
+function showHeardLanguage(l) {
+  const heard = `I heard: ${languageLabel(l)}`;
+  document.getElementById('heard-feedback').textContent = heard;
+  dbg(heard);
+}
+
+function handleLanguageAnswer(text, source = 'voice') {
+  const selected = parseLanguageAnswer(text);
+  if (!selected) return;
+  chooseLanguage(selected, source, text);
 }
 
 function pickLang(l) {
+  chooseLanguage(l, 'button', languageLabel(l));
+}
+
+function chooseLanguage(l, source = 'button', heardText = '') {
+  if (languageChosen) return;
+  languageChosen = true;
   lang = l;
+  showHeardLanguage(l);
   document.getElementById('lang-screen').classList.remove('show');
   if (recog) { try { recog.stop(); } catch(e){} }
   const open = lang === 'en'
@@ -508,8 +587,9 @@ function dbg(m) {
 function resetIdle() {
   clearTimeout(idleTimer);
   idleTimer = setTimeout(() => {
-    synth.cancel(); history = []; name = '';
+    synth.cancel(); history = []; name = ''; languageChosen = false;
     appState = 'idle'; setState('idle'); hideBubble();
+    document.getElementById('heard-feedback').textContent = '';
     document.getElementById('lang-screen').classList.remove('show');
     startRec();
   }, 180000);
@@ -530,6 +610,12 @@ function unlock() {
   dbg('✅ Ash is ready — say "Hi Ash, this is [name]"');
   resetIdle();
 }
+
+document.getElementById('lang-form').addEventListener('submit', event => {
+  event.preventDefault();
+  const typed = document.getElementById('lang-input').value;
+  handleLanguageAnswer(typed, 'typed');
+});
 </script>
 </body>
 </html>
