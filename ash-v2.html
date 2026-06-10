@@ -212,7 +212,7 @@ body {
     <div class="tavus-error" id="tavus-error">
       <strong>Unable to start Tavus video.</strong>
       <div id="tavus-error-text"></div>
-      <button type="button" onclick="window.openCurrentTavusRoom ? window.openCurrentTavusRoom() : startLegacyAsh()">Open Tavus room directly</button>
+      <button type="button" onclick="window.openCurrentTavusRoom ? window.openCurrentTavusRoom() : startLegacyAsh()">Retry as Clark's Customer</button>
       <button type="button" onclick="startLegacyAsh()">Use browser fallback</button>
     </div>
   </div>
@@ -311,6 +311,7 @@ let history = [], idleTimer = null;
 let ashCall = null;
 const TAVUS_START_TIMEOUT_MS = 25000;
 const TAVUS_JOIN_TIMEOUT_MS = 30000;
+const TAVUS_CUSTOMER_NAME = "Clark's Customer";
 
 // ═══ SYSTEM PROMPTS ═══
 const SYS_EN = `You are Ash, master craftsperson guide for Clark's Harwood Lumber Co., Houston TX. You were just introduced to this customer. Speak warmly and naturally like a 30-year veteran who loves wood. Keep responses to 2-3 sentences max — this is a voice conversation. Never use bullet points or lists. Speak like a real person.
@@ -496,7 +497,7 @@ function getSafeTavusUrlForLog(url) {
 
 function getTavusJoinMode() {
   const mode = new URLSearchParams(window.location.search).get('tavus_mode');
-  return mode === 'daily' || mode === 'redirect' ? mode : 'iframe';
+  return mode === 'iframe' || mode === 'redirect' ? mode : 'daily';
 }
 
 function redirectToTavusConversation(conversationUrl, reason = 'manual-fallback') {
@@ -530,6 +531,8 @@ function openTavusConversation(conversationUrl, meetingToken = '') {
     return;
   }
 
+  console.warn('Tavus iframe mode uses Tavus/Daily's hosted room UI. Prefer Daily mode so Ash can join the customer automatically as Clark's Customer.');
+
   const iframe = document.createElement('iframe');
   iframe.title = 'Talk with Ash on Tavus';
   iframe.src = conversationUrl;
@@ -541,7 +544,7 @@ function openTavusConversation(conversationUrl, meetingToken = '') {
   iframe.style.background = '#050200';
 
   const iframeTimeout = setTimeout(() => {
-    showTavusError(`Tavus room iframe did not load within ${Math.round(TAVUS_JOIN_TIMEOUT_MS / 1000)} seconds. Opening the room directly is available as a fallback.`);
+    showTavusError(`Tavus room iframe did not load within ${Math.round(TAVUS_JOIN_TIMEOUT_MS / 1000)} seconds. Retry the Daily join to enter as ${TAVUS_CUSTOMER_NAME}.`);
     console.warn('Tavus iframe timeout.', {
       conversation_url: safeUrl,
       reason: 'iframe-load-timeout',
@@ -558,10 +561,10 @@ function openTavusConversation(conversationUrl, meetingToken = '') {
       conversation_url: safeUrl,
       joinedEventObservable: false
     });
-    dbg('✅ Tavus room loaded — tap Join in the Tavus room to talk with Ash');
+    dbg('✅ Tavus room loaded — if prompted, continue as Clark\'s Customer to talk with Ash');
   }, { once: true });
 
-  window.openCurrentTavusRoom = () => redirectToTavusConversation(conversationUrl, 'iframe-fallback');
+  window.openCurrentTavusRoom = () => openTavusConversationWithDaily(conversationUrl, meetingToken, safeUrl);
   frame.appendChild(iframe);
   console.info('Tavus iframe embed started.', { conversation_url: safeUrl });
 }
@@ -569,9 +572,18 @@ function openTavusConversation(conversationUrl, meetingToken = '') {
 function openTavusConversationWithDaily(conversationUrl, meetingToken = '', safeUrl = getSafeTavusUrlForLog(conversationUrl)) {
   const frame = document.getElementById('tavus-frame');
   const loading = document.getElementById('tavus-loading');
+  document.getElementById('tavus-error').classList.remove('show');
+  frame.innerHTML = '';
+
+  if (ashCall?.destroy) {
+    Promise.resolve(ashCall.destroy()).catch(error => {
+      console.warn('Previous Tavus Daily frame cleanup failed.', { reason: error?.message || 'destroy-failed' });
+    });
+  }
+  ashCall = null;
 
   if (!window.Daily) {
-    showTavusError('Daily video library did not load. Opening the Tavus room directly is available as a fallback.');
+    showTavusError(`Daily video library did not load, so Ash cannot automatically enter as ${TAVUS_CUSTOMER_NAME}. Try again when the library is available.`);
     console.warn('Tavus Daily embed failed before join.', { conversation_url: safeUrl, reason: 'daily-js-not-loaded' });
     return;
   }
@@ -584,6 +596,7 @@ function openTavusConversationWithDaily(conversationUrl, meetingToken = '', safe
       height: '100%',
       border: '0'
     },
+    userName: TAVUS_CUSTOMER_NAME,
     theme: {
       colors: {
         accent: '#F5C842',
@@ -594,7 +607,7 @@ function openTavusConversationWithDaily(conversationUrl, meetingToken = '', safe
   });
 
   const joinTimeout = setTimeout(() => {
-    showTavusError(`Tavus Daily room did not emit joined-meeting within ${Math.round(TAVUS_JOIN_TIMEOUT_MS / 1000)} seconds. Opening the room directly is available as a fallback.`);
+    showTavusError(`Tavus Daily room did not emit joined-meeting within ${Math.round(TAVUS_JOIN_TIMEOUT_MS / 1000)} seconds. Retry joining as ${TAVUS_CUSTOMER_NAME}.`);
     console.warn('Tavus Daily join timeout.', {
       conversation_url: safeUrl,
       reason: 'joined-meeting-timeout',
@@ -621,7 +634,7 @@ function openTavusConversationWithDaily(conversationUrl, meetingToken = '', safe
 
   const joinOptions = {
     url: conversationUrl,
-    userName: "Clark's Customer"
+    userName: TAVUS_CUSTOMER_NAME
   };
 
   if (typeof meetingToken === 'string' && meetingToken.trim()) {
