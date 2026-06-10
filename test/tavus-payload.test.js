@@ -30,8 +30,11 @@ test('Tavus conversation payload includes only valid app defaults when no option
   assert.equal(payload.replica_id, process.env.TAVUS_REPLICA_ID || 'rdf61be0d4e1');
   assert.equal(payload.callback_url, 'https://ash-avsar.onrender.com/api/tavus/callback');
   assert.equal(Object.hasOwn(payload, 'properties'), false);
-  assert.equal(payload.custom_greeting.includes("I'm Ash"), true);
+  assert.equal(payload.custom_greeting, "Hi, welcome to Clark's Hardwood Lumber. I'm Ash. Are you working on a project today, or would you like help finding something?");
+  assert.equal(payload.custom_greeting.toLowerCase().includes('record'), false);
   assert.equal(payload.conversational_context.includes('Claude-powered Render brain'), true);
+  assert.equal(payload.conversational_context.includes('Do not ask for permission to record'), true);
+  assert.equal(payload.conversational_context.includes('Would you like me to get James to help you?'), true);
 });
 
 

@@ -18,14 +18,27 @@ const TAVUS_PERSONA_ID = process.env.TAVUS_PERSONA_ID || 'p3ebb7951fa5';
 const TAVUS_REPLICA_ID = process.env.TAVUS_REPLICA_ID || 'rdf61be0d4e1';
 const TAVUS_LLM_MODEL = process.env.TAVUS_LLM_MODEL || 'ash-claude';
 const RENDER_BRAIN_URL = (process.env.ASH_BRAIN_URL || 'https://ash-avsar.onrender.com').replace(/\/$/, '');
+const JAMES_HELP_MESSAGE = 'James help requested.';
+const JAMES_HELP_LOG_MESSAGE = 'Customer requested James.';
+let lastJamesHelpRequest = null;
+
+const CONVERSATION_BEHAVIOR_PROMPT = `Conversation behavior:
+- Greet naturally and move directly into helping the customer. A good opening is: "Hi, welcome to Clark's Hardwood Lumber. I'm Ash. Are you working on a project today, or would you like help finding something?"
+- Do not ask for permission to record, and do not bring up recording mid-conversation. If Tavus or another platform displays a legally required recording notice before the conversation begins, treat that as already handled and never repeat it.
+- At a natural point, ask: "Would you like me to get James to help you?"
+- If the customer asks for James, says they need help from a real person, or answers yes to getting James, respond exactly: "Of course. I'll get James for you." Do not claim James has been contacted unless a real notification system exists.`;
 
 const SYSTEM_PROMPTS = {
   en: `You are Ash, master craftsperson guide for Clark's Harwood Lumber Co., Houston TX. Speak warmly and naturally like a 30-year veteran who loves wood. Keep responses to 2-3 sentences max because this is a voice conversation. Never use bullet points or lists. Speak like a real person.
 
-You know Clark's offers: premium hardwood lumber, plywood, slabs, mouldings, custom millwork, doors, decking, tools, finishes, and expert advice. If asked exact price, inventory, order status, or anything uncertain, say you'll connect them with the Clark's team. Always stay helpful, concise, and in character.`,
+You know Clark's offers: premium hardwood lumber, plywood, slabs, mouldings, custom millwork, doors, decking, tools, finishes, and expert advice. If asked exact price, inventory, order status, or anything uncertain, say you'll connect them with the Clark's team. Always stay helpful, concise, and in character.
+
+${CONVERSATION_BEHAVIOR_PROMPT}`,
   es: `Eres Ash, guía maestra de Clark's Harwood Lumber Co., Houston TX. Habla cálidamente como veterana de 30 años que ama la madera. Máximo 2-3 oraciones porque es conversación de voz. No uses viñetas ni listas.
 
-Conoces que Clark's ofrece: maderas finas, plywood, slabs, molduras, trabajos de carpintería a medida, puertas, decking, herramientas, acabados y consejos expertos. Si preguntan precio exacto, inventario, estado de pedido o algo incierto, di que los conectarás con el equipo de Clark's. Responde siempre en español.`
+Conoces que Clark's ofrece: maderas finas, plywood, slabs, molduras, trabajos de carpintería a medida, puertas, decking, herramientas, acabados y consejos expertos. Si preguntan precio exacto, inventario, estado de pedido o algo incierto, di que los conectarás con el equipo de Clark's. Responde siempre en español.
+
+${CONVERSATION_BEHAVIOR_PROMPT}`
 };
 
 const contentTypes = {
@@ -276,6 +289,91 @@ function normalizeOpenAiMessages(body) {
   return { system: systemMessages.join('\n\n'), messages };
 }
 
+
+function getLatestUserMessage(messages = []) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === 'user') {
+      return String(messages[index].content || '');
+    }
+  }
+
+  return '';
+}
+
+function normalizeIntentText(text = '') {
+  return String(text)
+    .toLowerCase()
+    .replace(/[’']/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function previousAssistantAskedForJames(messages = []) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === 'user') {
+      continue;
+    }
+
+    if (message?.role !== 'assistant') {
+      continue;
+    }
+
+    return /would\s+you\s+like\s+me\s+to\s+get\s+james\s+to\s+help\s+you/i.test(String(message.content || ''));
+  }
+
+  return false;
+}
+
+function isJamesHelpIntent(text = '', messages = []) {
+  const normalized = normalizeIntentText(text);
+  if (!normalized) {
+    return false;
+  }
+
+  const explicitPatterns = [
+    /\bget james\b/,
+    /\bcall james\b/,
+    /\bjames\b.*\b(help|assist|assistance)\b/,
+    /\b(help|assist|assistance)\b.*\bjames\b/,
+    /\bi need help\b/,
+    /\bneed (some )?(real )?(person|human|someone|staff|employee|associate)\b/,
+    /\bcall (someone|somebody|a person|an employee|staff|associate)\b/,
+    /\bget (someone|somebody|a person|an employee|staff|associate)\b/,
+    /\bcan someone help me\b/,
+    /\bcould someone help me\b/,
+    /\bis someone available\b/,
+    /\breal person\b/,
+    /\bhuman help\b/
+  ];
+
+  if (explicitPatterns.some(pattern => pattern.test(normalized))) {
+    return true;
+  }
+
+  if (!previousAssistantAskedForJames(messages)) {
+    return false;
+  }
+
+  return /^(yes|yes please|yeah|yep|sure|please|please do|that would be great|ok|okay|sounds good|i do|i would|absolutely)\b/.test(normalized);
+}
+
+function recordJamesHelpRequest(source = 'conversation') {
+  lastJamesHelpRequest = {
+    message: JAMES_HELP_MESSAGE,
+    logged: JAMES_HELP_LOG_MESSAGE,
+    source,
+    created_at: new Date().toISOString()
+  };
+  console.log(JAMES_HELP_LOG_MESSAGE);
+  return lastJamesHelpRequest;
+}
+
+function buildJamesHelpResponsePayload(model = TAVUS_LLM_MODEL) {
+  return toOpenAiChatCompletion({ model, reply: "Of course. I'll get James for you." });
+}
+
 function extractOpenAiContent(content) {
   if (typeof content === 'string') {
     return content.trim();
@@ -399,11 +497,24 @@ async function handleOpenAiChatCompletions(req, res) {
 
   const defaultSystem = `${SYSTEM_PROMPTS.en}\n\nYou are speaking through Tavus Conversational Video Interface. Tavus handles your face, voice, speech recognition, and video presence. The customer's transcribed speech is sent here, and this Render app supplies your Claude-powered Clark's woodworking brain. Keep every answer natural for speech.`;
   const model = body.model || TAVUS_LLM_MODEL;
+  const effectiveSystem = `${system || defaultSystem}\n\nImportant behavior override: ${CONVERSATION_BEHAVIOR_PROMPT}`;
+
+  if (isJamesHelpIntent(getLatestUserMessage(messages), messages)) {
+    recordJamesHelpRequest('tavus-llm');
+    const responsePayload = buildJamesHelpResponsePayload(model);
+    if (body.stream) {
+      sendSse(res, toOpenAiStreamEvents({ model, reply: responsePayload.choices[0].message.content }));
+      return;
+    }
+
+    sendJson(res, 200, responsePayload);
+    return;
+  }
 
   try {
     const result = await askAnthropic({
       messages,
-      system: system || defaultSystem,
+      system: effectiveSystem,
       maxTokens: body.max_tokens || 180
     });
 
@@ -448,6 +559,13 @@ async function handleChat(req, res) {
 
   const lang = body.lang === 'es' ? 'es' : 'en';
   const system = typeof body.system === 'string' && body.system.trim() ? body.system : SYSTEM_PROMPTS[lang];
+  const effectiveSystem = `${system}\n\nImportant behavior override: ${CONVERSATION_BEHAVIOR_PROMPT}`;
+
+  if (isJamesHelpIntent(getLatestUserMessage(messages), messages)) {
+    recordJamesHelpRequest('browser-chat');
+    sendJson(res, 200, { reply: "Of course. I'll get James for you.", james_help_requested: true });
+    return;
+  }
 
   try {
     const anthropicResponse = await requestJson(ANTHROPIC_API_URL, {
@@ -460,7 +578,7 @@ async function handleChat(req, res) {
     }, {
       model: DEFAULT_MODEL,
       max_tokens: Number(body.max_tokens || 220),
-      system,
+      system: effectiveSystem,
       messages
     });
 
@@ -514,8 +632,8 @@ function buildTavusConversationPayload(body = {}, publicBaseUrl) {
     persona_id: TAVUS_PERSONA_ID,
     conversation_name: body.conversation_name || `Ash at Clark's ${new Date().toISOString()}`,
     callback_url: `${publicBaseUrl}/api/tavus/callback`,
-    custom_greeting: body.custom_greeting || "Hi, I'm Ash. Welcome to Clark's Hardwood Lumber. What are you working on today?",
-    conversational_context: body.conversational_context || "You are Ash for Clark's Hardwood Lumber. Use the Claude-powered Render brain configured on this persona for woodworking and Clark's store knowledge."
+    custom_greeting: body.custom_greeting || "Hi, welcome to Clark's Hardwood Lumber. I'm Ash. Are you working on a project today, or would you like help finding something?",
+    conversational_context: body.conversational_context || `You are Ash for Clark's Hardwood Lumber. Use the Claude-powered Render brain configured on this persona for woodworking and Clark's store knowledge. ${CONVERSATION_BEHAVIOR_PROMPT}`
   };
 
   if (typeof body.audio_only === 'boolean') {
@@ -798,6 +916,15 @@ async function handleTavusPersonaConfiguration(req, res) {
   }
 }
 
+async function handleJamesHelpRequest(req, res) {
+  recordJamesHelpRequest('manual-endpoint');
+  sendJson(res, 200, { ok: true, message: JAMES_HELP_MESSAGE });
+}
+
+function handleJamesHelpStatus(req, res) {
+  sendJson(res, 200, { helpRequested: Boolean(lastJamesHelpRequest), request: lastJamesHelpRequest });
+}
+
 async function handleTavusCallback(req, res) {
   try {
     await readRequestBody(req);
@@ -859,6 +986,16 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === 'POST' && req.url?.startsWith('/api/help/james')) {
+    await handleJamesHelpRequest(req, res);
+    return;
+  }
+
+  if (req.method === 'GET' && req.url?.startsWith('/api/help/james/status')) {
+    handleJamesHelpStatus(req, res);
+    return;
+  }
+
   if (req.method === 'POST' && req.url?.startsWith('/api/tavus/callback')) {
     await handleTavusCallback(req, res);
     return;
@@ -878,4 +1015,4 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   });
 }
 
-export { buildTavusConversationPayload, normalizeTavusConversationResponse, server };
+export { buildTavusConversationPayload, isJamesHelpIntent, normalizeTavusConversationResponse, server };
