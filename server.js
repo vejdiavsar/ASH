@@ -12,6 +12,11 @@ const DEFAULT_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
 const ANTHROPIC_KEY_PATTERN = /sk-ant-[A-Za-z0-9_-]+/;
 const MAX_BODY_BYTES = 1024 * 1024;
 const ANTHROPIC_TIMEOUT_MS = 30000;
+const TAVUS_API_URL = 'https://tavusapi.com/v2';
+const TAVUS_PERSONA_ID = process.env.TAVUS_PERSONA_ID || 'p3ebb7951fa5';
+const TAVUS_REPLICA_ID = process.env.TAVUS_REPLICA_ID || 'rdf61be0d4e1';
+const TAVUS_LLM_MODEL = process.env.TAVUS_LLM_MODEL || 'ash-claude';
+const RENDER_BRAIN_URL = (process.env.ASH_BRAIN_URL || 'https://ash-avsar.onrender.com').replace(/\/$/, '');
 
 const SYSTEM_PROMPTS = {
   en: `You are Ash, master craftsperson guide for Clark's Harwood Lumber Co., Houston TX. Speak warmly and naturally like a 30-year veteran who loves wood. Keep responses to 2-3 sentences max because this is a voice conversation. Never use bullet points or lists. Speak like a real person.
@@ -45,6 +50,39 @@ function sendJson(res, statusCode, payload) {
     'Content-Length': Buffer.byteLength(body)
   });
   res.end(body);
+}
+
+function sendSse(res, events) {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive'
+  });
+
+  for (const event of events) {
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
+  }
+
+  res.write('data: [DONE]\n\n');
+  res.end();
+}
+
+function getBearerToken(req) {
+  const auth = req.headers.authorization || '';
+  return auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+}
+
+function verifyLlmAccess(req) {
+  const expectedKey = process.env.ASH_LLM_API_KEY || process.env.TAVUS_LLM_API_KEY || '';
+  if (!expectedKey) {
+    return true;
+  }
+
+  return getBearerToken(req) === expectedKey || req.headers['x-api-key'] === expectedKey;
+}
+
+function isConfigured(value) {
+  return Boolean(String(value || '').trim());
 }
 
 function readRequestBody(req) {
@@ -209,6 +247,182 @@ function normalizeMessages(body) {
   return [{ role: 'user', content: message.slice(0, 8000) }];
 }
 
+function normalizeOpenAiMessages(body) {
+  if (!Array.isArray(body.messages)) {
+    return { system: '', messages: [] };
+  }
+
+  const systemMessages = [];
+  const messages = [];
+
+  for (const message of body.messages) {
+    if (!message || !['system', 'user', 'assistant'].includes(message.role)) {
+      continue;
+    }
+
+    const content = extractOpenAiContent(message.content).slice(0, 8000);
+    if (!content) {
+      continue;
+    }
+
+    if (message.role === 'system') {
+      systemMessages.push(content);
+    } else {
+      messages.push({ role: message.role, content });
+    }
+  }
+
+  return { system: systemMessages.join('\n\n'), messages };
+}
+
+function extractOpenAiContent(content) {
+  if (typeof content === 'string') {
+    return content.trim();
+  }
+
+  if (Array.isArray(content)) {
+    return content
+      .map(part => {
+        if (typeof part === 'string') return part;
+        if (part?.type === 'text') return part.text || '';
+        return '';
+      })
+      .join(' ')
+      .trim();
+  }
+
+  return '';
+}
+
+function toOpenAiChatCompletion({ model, reply }) {
+  const id = `chatcmpl-ash-${Date.now()}`;
+  const created = Math.floor(Date.now() / 1000);
+  return {
+    id,
+    object: 'chat.completion',
+    created,
+    model,
+    choices: [{
+      index: 0,
+      message: { role: 'assistant', content: reply },
+      finish_reason: 'stop'
+    }]
+  };
+}
+
+function toOpenAiStreamEvents({ model, reply }) {
+  const id = `chatcmpl-ash-${Date.now()}`;
+  const created = Math.floor(Date.now() / 1000);
+  return [
+    {
+      id,
+      object: 'chat.completion.chunk',
+      created,
+      model,
+      choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }]
+    },
+    {
+      id,
+      object: 'chat.completion.chunk',
+      created,
+      model,
+      choices: [{ index: 0, delta: { content: reply }, finish_reason: null }]
+    },
+    {
+      id,
+      object: 'chat.completion.chunk',
+      created,
+      model,
+      choices: [{ index: 0, delta: {}, finish_reason: 'stop' }]
+    }
+  ];
+}
+
+async function askAnthropic({ messages, system, maxTokens = 220 }) {
+  const apiKey = getAnthropicApiKey();
+  if (!apiKey) {
+    const error = new Error('ANTHROPIC_API_KEY is not configured.');
+    error.statusCode = 500;
+    throw error;
+  }
+
+  const anthropicResponse = await requestJson(ANTHROPIC_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'anthropic-version': ANTHROPIC_VERSION,
+      'x-api-key': apiKey
+    }
+  }, {
+    model: DEFAULT_MODEL,
+    max_tokens: Number(maxTokens || 220),
+    system,
+    messages
+  });
+
+  const data = anthropicResponse.data;
+  if (!anthropicResponse.ok) {
+    const error = new Error(data.error?.message || 'Anthropic request failed.');
+    error.statusCode = anthropicResponse.status;
+    error.type = data.error?.type || 'anthropic_error';
+    throw error;
+  }
+
+  return {
+    reply: data.content?.map(block => block.text || '').join('').trim() || '',
+    content: data.content,
+    model: data.model || DEFAULT_MODEL
+  };
+}
+
+async function handleOpenAiChatCompletions(req, res) {
+  if (!verifyLlmAccess(req)) {
+    sendJson(res, 401, { error: { message: 'Unauthorized.', type: 'authentication_error' } });
+    return;
+  }
+
+  let body;
+  try {
+    const rawBody = await readRequestBody(req);
+    body = rawBody ? JSON.parse(rawBody) : {};
+  } catch {
+    sendJson(res, 400, { error: { message: 'Invalid JSON request body.', type: 'invalid_request_error' } });
+    return;
+  }
+
+  const { system, messages } = normalizeOpenAiMessages(body);
+  if (messages.length === 0) {
+    sendJson(res, 400, { error: { message: 'Provide a messages array.', type: 'invalid_request_error' } });
+    return;
+  }
+
+  const defaultSystem = `${SYSTEM_PROMPTS.en}\n\nYou are speaking through Tavus Conversational Video Interface. Tavus handles your face, voice, speech recognition, and video presence. The customer's transcribed speech is sent here, and this Render app supplies your Claude-powered Clark's woodworking brain. Keep every answer natural for speech.`;
+  const model = body.model || TAVUS_LLM_MODEL;
+
+  try {
+    const result = await askAnthropic({
+      messages,
+      system: system || defaultSystem,
+      maxTokens: body.max_tokens || 180
+    });
+
+    if (body.stream) {
+      sendSse(res, toOpenAiStreamEvents({ model, reply: result.reply }));
+      return;
+    }
+
+    sendJson(res, 200, toOpenAiChatCompletion({ model, reply: result.reply }));
+  } catch (error) {
+    sendJson(res, error.statusCode || 502, {
+      error: {
+        message: error.statusCode === 500 ? error.message : 'Unable to generate Ash response.',
+        detail: error.message,
+        type: error.type || 'ash_brain_error'
+      }
+    });
+  }
+}
+
 async function handleChat(req, res) {
   const apiKey = getAnthropicApiKey();
   if (!apiKey) {
@@ -265,6 +479,143 @@ async function handleChat(req, res) {
   }
 }
 
+function getPublicBaseUrl(req) {
+  return (process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || `https://${req.headers.host}`).replace(/\/$/, '');
+}
+
+function getTavusApiKey() {
+  return (process.env.TAVUS_API_KEY || '').trim();
+}
+
+async function handleTavusConversation(req, res) {
+  const apiKey = getTavusApiKey();
+  if (!apiKey) {
+    sendJson(res, 500, { error: 'TAVUS_API_KEY is not configured.' });
+    return;
+  }
+
+  let body = {};
+  if (req.method === 'POST') {
+    try {
+      const rawBody = await readRequestBody(req);
+      body = rawBody ? JSON.parse(rawBody) : {};
+    } catch {
+      sendJson(res, 400, { error: 'Invalid JSON request body.' });
+      return;
+    }
+  }
+
+  const publicBaseUrl = getPublicBaseUrl(req);
+  const payload = {
+    replica_id: body.replica_id || TAVUS_REPLICA_ID,
+    persona_id: body.persona_id || TAVUS_PERSONA_ID,
+    conversation_name: body.conversation_name || `Ash at Clark's ${new Date().toISOString()}`,
+    callback_url: body.callback_url || `${publicBaseUrl}/api/tavus/callback`,
+    custom_greeting: body.custom_greeting || "Hi, I'm Ash. Welcome to Clark's Hardwood Lumber. What are you working on today?",
+    conversational_context: body.conversational_context || "You are Ash for Clark's Hardwood Lumber. Use the Claude-powered Render brain configured on this persona for woodworking and Clark's store knowledge.",
+    properties: {
+      ...(body.properties || {}),
+      participant_left_timeout: body.properties?.participant_left_timeout || 60
+    }
+  };
+
+  try {
+    const tavusResponse = await requestJson(`${TAVUS_API_URL}/conversations`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey
+      }
+    }, payload);
+
+    if (!tavusResponse.ok) {
+      sendJson(res, tavusResponse.status, {
+        error: tavusResponse.data.message || tavusResponse.data.error || 'Tavus conversation creation failed.',
+        detail: tavusResponse.data
+      });
+      return;
+    }
+
+    sendJson(res, 200, tavusResponse.data);
+  } catch (error) {
+    sendJson(res, 502, { error: 'Unable to reach Tavus.', detail: error.message });
+  }
+}
+
+async function handleTavusPersonaConfiguration(req, res) {
+  const apiKey = getTavusApiKey();
+  if (!apiKey) {
+    sendJson(res, 500, { error: 'TAVUS_API_KEY is not configured.' });
+    return;
+  }
+
+  let body = {};
+  try {
+    const rawBody = await readRequestBody(req);
+    body = rawBody ? JSON.parse(rawBody) : {};
+  } catch {
+    sendJson(res, 400, { error: 'Invalid JSON request body.' });
+    return;
+  }
+
+  const publicBaseUrl = getPublicBaseUrl(req);
+  const llmApiKey = process.env.ASH_LLM_API_KEY || process.env.TAVUS_LLM_API_KEY || '';
+  if (!llmApiKey) {
+    sendJson(res, 500, { error: 'ASH_LLM_API_KEY or TAVUS_LLM_API_KEY is required before configuring Tavus.' });
+    return;
+  }
+
+  const personaId = TAVUS_PERSONA_ID;
+  const patch = [
+    { op: 'replace', path: '/default_replica_id', value: TAVUS_REPLICA_ID },
+    { op: 'replace', path: '/layers/llm/model', value: TAVUS_LLM_MODEL },
+    { op: 'replace', path: '/layers/llm/base_url', value: `${publicBaseUrl}/v1` },
+    { op: 'replace', path: '/layers/llm/api_key', value: llmApiKey },
+    { op: 'replace', path: '/layers/llm/speculative_inference', value: true }
+  ];
+
+  try {
+    const tavusResponse = await requestJson(`${TAVUS_API_URL}/personas/${encodeURIComponent(personaId)}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey
+      }
+    }, patch);
+
+    if (!tavusResponse.ok && tavusResponse.status !== 304) {
+      sendJson(res, tavusResponse.status, {
+        error: tavusResponse.data.message || tavusResponse.data.error || 'Tavus persona configuration failed.',
+        detail: tavusResponse.data
+      });
+      return;
+    }
+
+    sendJson(res, 200, {
+      ok: true,
+      persona_id: personaId,
+      replica_id: TAVUS_REPLICA_ID,
+      llm: {
+        model: TAVUS_LLM_MODEL,
+        base_url: `${publicBaseUrl}/v1`,
+        api_key_configured: true
+      },
+      tavusStatus: tavusResponse.status
+    });
+  } catch (error) {
+    sendJson(res, 502, { error: 'Unable to configure Tavus persona.', detail: error.message });
+  }
+}
+
+async function handleTavusCallback(req, res) {
+  try {
+    await readRequestBody(req);
+  } catch {
+    // Webhooks should not break Tavus retries because of a malformed or oversized body.
+  }
+  sendJson(res, 200, { ok: true });
+}
+
 function serveStatic(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const requestedPath = url.pathname === '/' ? '/ash-v2.html' : url.pathname;
@@ -286,13 +637,39 @@ const server = createServer(async (req, res) => {
     sendJson(res, 200, {
       ok: true,
       service: 'ash-phase-1',
-      anthropicKeyConfigured: Boolean(getAnthropicApiKey())
+      anthropicKeyConfigured: Boolean(getAnthropicApiKey()),
+      tavusKeyConfigured: Boolean(getTavusApiKey()),
+      tavusPersonaId: TAVUS_PERSONA_ID,
+      tavusReplicaId: TAVUS_REPLICA_ID,
+      tavusLlmModel: TAVUS_LLM_MODEL,
+      tavusLlmAuthConfigured: isConfigured(process.env.ASH_LLM_API_KEY || process.env.TAVUS_LLM_API_KEY),
+      renderBrainUrl: RENDER_BRAIN_URL
     });
     return;
   }
 
   if (req.method === 'POST' && req.url?.startsWith('/api/chat')) {
     await handleChat(req, res);
+    return;
+  }
+
+  if (req.method === 'POST' && req.url?.startsWith('/v1/chat/completions')) {
+    await handleOpenAiChatCompletions(req, res);
+    return;
+  }
+
+  if (req.method === 'POST' && req.url?.startsWith('/api/tavus/conversations')) {
+    await handleTavusConversation(req, res);
+    return;
+  }
+
+  if (req.method === 'POST' && req.url?.startsWith('/api/tavus/configure-persona')) {
+    await handleTavusPersonaConfiguration(req, res);
+    return;
+  }
+
+  if (req.method === 'POST' && req.url?.startsWith('/api/tavus/callback')) {
+    await handleTavusCallback(req, res);
     return;
   }
 

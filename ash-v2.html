@@ -190,6 +190,48 @@ body {
   letter-spacing: .5px;
 }
 
+/* ── TAVUS CONVERSATIONAL VIDEO ── */
+.tavus-stage {
+  position: fixed; inset: 0; z-index: 15;
+  background: #050200;
+  display: none;
+}
+.tavus-stage.show { display: block; }
+.tavus-frame {
+  width: 100%; height: 100%; border: 0;
+  background: #050200;
+}
+.tavus-loading {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 18px;
+  background: radial-gradient(circle at 50% 35%, rgba(245,200,66,0.18), rgba(17,9,0,0.96) 55%);
+  color: #FBF0DC; text-align: center; padding: 30px;
+}
+.tavus-loading h2 {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 34px; color: #F5C842; letter-spacing: 2px;
+}
+.tavus-loading p { max-width: 520px; line-height: 1.5; color: rgba(253,240,220,0.68); }
+.tavus-spinner {
+  width: 44px; height: 44px; border-radius: 50%;
+  border: 3px solid rgba(245,200,66,0.22);
+  border-top-color: #F5C842;
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.tavus-error {
+  max-width: 620px; color: rgba(253,240,220,0.75);
+  background: rgba(255,255,255,0.06); border: 1px solid rgba(245,200,66,0.24);
+  border-radius: 18px; padding: 20px; display: none;
+}
+.tavus-error.show { display: block; }
+.tavus-error button {
+  margin-top: 14px; padding: 12px 20px; border-radius: 999px; border: 0;
+  background: #F5C842; color: #110900; font-family: 'DM Sans', sans-serif;
+  font-weight: 700; cursor: pointer;
+}
+
 /* ── START BUTTON (first tap unlock) ── */
 #start-btn {
   position: fixed; inset: 0; z-index: 30;
@@ -216,11 +258,31 @@ body {
 <div class="grain"></div>
 <div id="dbg">Starting up...</div>
 
+<!-- TAVUS FACE + VOICE -->
+<div class="tavus-stage" id="tavus-stage" aria-label="Ash Tavus conversation">
+  <div class="tavus-loading" id="tavus-loading">
+    <div class="tavus-spinner" aria-hidden="true"></div>
+    <h2>Connecting Ash…</h2>
+    <p>Tavus is opening Ash's face and voice. The conversation brain is routed back to the Claude-powered Render app.</p>
+    <div class="tavus-error" id="tavus-error">
+      <strong>Unable to start Tavus video.</strong>
+      <div id="tavus-error-text"></div>
+      <button type="button" onclick="startLegacyAsh()">Use browser fallback</button>
+    </div>
+  </div>
+  <iframe
+    class="tavus-frame"
+    id="tavus-frame"
+    title="Talk with Ash"
+    allow="camera; microphone; autoplay; fullscreen; display-capture; clipboard-read; clipboard-write"
+    allowfullscreen></iframe>
+</div>
+
 <!-- FIRST TAP UNLOCK -->
 <div id="start-btn" onclick="unlock()">
   <h2>ASH</h2>
-  <p>Clark's Harwood Lumber · AI Guide</p>
-  <button class="tap-btn">TAP TO WAKE ASH</button>
+  <p>Clark's Harwood Lumber · Tavus Video Guide</p>
+  <button class="tap-btn">START VIDEO WITH ASH</button>
 </div>
 
 <!-- MAIN SCREEN -->
@@ -595,20 +657,69 @@ function resetIdle() {
   }, 180000);
 }
 
-// ═══ UNLOCK (first tap) ═══
-function unlock() {
+// ═══ TAVUS VIDEO ═══
+function openTavusConversation(conversationUrl) {
+  const stage = document.getElementById('tavus-stage');
+  const frame = document.getElementById('tavus-frame');
+  const loading = document.getElementById('tavus-loading');
+  frame.src = conversationUrl;
+  stage.classList.add('show');
+  setState('speaking');
+  dbg('✅ Tavus video connected — Ash face and voice are live');
+  frame.addEventListener('load', () => {
+    loading.style.display = 'none';
+  }, { once: true });
+}
+
+function showTavusError(message) {
+  document.getElementById('tavus-error-text').textContent = message;
+  document.getElementById('tavus-error').classList.add('show');
+  dbg('⚠️ Tavus unavailable: ' + message);
+}
+
+function startTavusAsh() {
   document.getElementById('start-btn').style.display = 'none';
+  document.getElementById('tavus-stage').classList.add('show');
+  dbg('Connecting Tavus face and voice…');
+
+  fetch('/api/tavus/conversations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({})
+  })
+  .then(async response => {
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || data.message || 'Tavus request failed.');
+    }
+    if (!data.conversation_url) {
+      throw new Error('Tavus did not return a conversation_url.');
+    }
+    openTavusConversation(data.conversation_url);
+  })
+  .catch(error => showTavusError(error.message));
+}
+
+function startLegacyAsh() {
+  document.getElementById('tavus-stage').classList.remove('show');
+  document.getElementById('tavus-loading').style.display = 'none';
   loadVoices();
-  // Play silent audio to unlock audio context
-  const ctx = new AudioContext();
-  const buf = ctx.createBuffer(1,1,22050);
-  const src = ctx.createBufferSource();
-  src.buffer = buf; src.connect(ctx.destination); src.start();
+  try {
+    const ctx = new AudioContext();
+    const buf = ctx.createBuffer(1,1,22050);
+    const src = ctx.createBufferSource();
+    src.buffer = buf; src.connect(ctx.destination); src.start();
+  } catch(e) {}
   appState = 'idle';
   setState('idle');
   startRec();
-  dbg('✅ Ash is ready — say "Hi Ash, this is [name]"');
+  dbg('✅ Browser fallback ready — say "Hi Ash, this is [name]"');
   resetIdle();
+}
+
+// ═══ UNLOCK (first tap) ═══
+function unlock() {
+  startTavusAsh();
 }
 
 document.getElementById('lang-form').addEventListener('submit', event => {
