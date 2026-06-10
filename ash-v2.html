@@ -162,8 +162,9 @@ body {
   background: rgba(0,0,0,0.8); color: #F5C842;
   font-size: 12px; font-family: monospace;
   padding: 6px 14px; z-index: 99;
-  letter-spacing: .5px;
+  letter-spacing: .5px; display: none;
 }
+body.debug #dbg { display: block; }
 
 /* ── TAVUS CONVERSATIONAL VIDEO ── */
 .tavus-stage {
@@ -173,11 +174,12 @@ body {
 }
 .tavus-stage.show { display: block; }
 .tavus-frame {
+  position: absolute; inset: 0; z-index: 1;
   width: 100%; height: 100%; border: 0;
   background: #050200;
 }
 .tavus-loading {
-  position: absolute; inset: 0;
+  position: absolute; inset: 0; z-index: 2;
   display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 18px;
   background: radial-gradient(circle at 50% 35%, rgba(245,200,66,0.18), rgba(17,9,0,0.96) 55%);
@@ -188,6 +190,14 @@ body {
   font-size: 34px; color: #F5C842; letter-spacing: 2px;
 }
 .tavus-loading p { max-width: 520px; line-height: 1.5; color: rgba(253,240,220,0.68); }
+.tavus-join-note {
+  position: absolute; left: 50%; bottom: 28px; z-index: 3;
+  transform: translateX(-50%); display: none;
+  background: rgba(17,9,0,0.88); border: 1px solid rgba(245,200,66,0.35);
+  color: #F5C842; border-radius: 999px; padding: 14px 22px;
+  font-size: 18px; font-weight: 700; box-shadow: 0 14px 42px rgba(0,0,0,0.38);
+}
+.tavus-stage.show-join-note .tavus-join-note { display: block; }
 .tavus-spinner {
   width: 44px; height: 44px; border-radius: 50%;
   border: 3px solid rgba(245,200,66,0.22);
@@ -220,16 +230,17 @@ body {
 <div class="tavus-stage" id="tavus-stage" aria-label="Ash Tavus conversation">
   <div class="tavus-loading" id="tavus-loading">
     <div class="tavus-spinner" aria-hidden="true"></div>
-    <h2>Connecting Ash…</h2>
-    <p>Tavus is opening Ash's face and voice. The conversation brain is routed back to the Claude-powered Render app.</p>
+    <h2>Opening Ash…</h2>
+    <p>Ash is getting ready to talk with you.</p>
     <div class="tavus-error" id="tavus-error">
       <strong>Unable to start Tavus video.</strong>
       <div id="tavus-error-text"></div>
-      <button type="button" onclick="window.openCurrentTavusRoom ? window.openCurrentTavusRoom() : startLegacyAsh()">Retry as Clark's Customer</button>
-      <button type="button" onclick="startLegacyAsh()">Use browser fallback</button>
+      <button type="button" onclick="window.openCurrentTavusRoom ? window.openCurrentTavusRoom() : startTavusAsh()">Try Ash again</button>
+      <button type="button" onclick="startLegacyAsh()">Use backup voice mode</button>
     </div>
   </div>
   <div class="tavus-frame" id="tavus-frame" aria-label="Talk with Ash"></div>
+  <div class="tavus-join-note" id="tavus-join-note" role="status">Tap Join to speak with Ash.</div>
 </div>
 
 
@@ -587,7 +598,8 @@ function showBubble(t) {
 function hideBubble() { document.getElementById('bubble').classList.remove('show'); }
 function dbg(m) {
   console.log(m);
-  document.getElementById('dbg').textContent = m;
+  const debugEl = document.getElementById('dbg');
+  if (debugEl) debugEl.textContent = m;
 }
 
 // ═══ IDLE RESET ═══
@@ -763,6 +775,7 @@ function openTavusConversation(conversationUrl, meetingToken = '') {
   const mode = getTavusJoinMode();
   const safeUrl = getSafeTavusUrlForLog(conversationUrl);
   stage.classList.add('show');
+  stage.classList.remove('show-join-note');
   frame.innerHTML = '';
   setState('thinking');
 
@@ -783,6 +796,8 @@ function openTavusConversation(conversationUrl, meetingToken = '') {
   }
 
   console.warn("Tavus iframe mode uses Tavus/Daily's hosted room UI. Prefer Daily mode so Ash can join the customer automatically as Clark's Customer.");
+  // Tavus currently returns a Daily-powered conversation URL. If a browser or Tavus/Daily account setting forces hosted pre-join in iframe mode, we cannot alter that cross-origin UI safely from this app; show only a plain customer instruction instead of technical camera/microphone/speaker guidance.
+  stage.classList.add('show-join-note');
 
   const iframe = document.createElement('iframe');
   iframe.title = 'Talk with Ash on Tavus';
@@ -795,7 +810,8 @@ function openTavusConversation(conversationUrl, meetingToken = '') {
   iframe.style.background = '#050200';
 
   const iframeTimeout = setTimeout(() => {
-    showTavusError('Ash is taking longer than expected to join. Please try again in a moment.');
+    showTavusError('Ash is taking longer than expected to join. If a Join button appears, tap Join to speak with Ash.');
+    document.getElementById('tavus-stage')?.classList.add('show-join-note');
     console.warn('Tavus iframe timeout.', {
       conversation_url: safeUrl,
       reason: 'iframe-load-timeout',
@@ -841,7 +857,9 @@ function openTavusConversationWithDaily(conversationUrl, meetingToken = '', safe
 
   ashCall = window.Daily.createFrame(frame, {
     showLeaveButton: false,
-    showFullscreenButton: true,
+    showFullscreenButton: false,
+    showLocalVideo: false,
+    showParticipantsBar: false,
     iframeStyle: {
       width: '100%',
       height: '100%',
@@ -858,7 +876,8 @@ function openTavusConversationWithDaily(conversationUrl, meetingToken = '', safe
   });
 
   const joinTimeout = setTimeout(() => {
-    showTavusError('Ash is taking longer than expected to join. Please try again in a moment.');
+    showTavusError('Ash is taking longer than expected to join. If a Join button appears, tap Join to speak with Ash.');
+    document.getElementById('tavus-stage')?.classList.add('show-join-note');
     console.warn('Tavus Daily join timeout.', {
       conversation_url: safeUrl,
       reason: 'joined-meeting-timeout',
@@ -889,7 +908,11 @@ function openTavusConversationWithDaily(conversationUrl, meetingToken = '', safe
 
   const joinOptions = {
     url: conversationUrl,
-    userName: TAVUS_CUSTOMER_NAME
+    userName: TAVUS_CUSTOMER_NAME,
+    showLocalVideo: false,
+    showParticipantsBar: false,
+    startVideoOff: true,
+    startAudioOff: false
   };
 
   if (typeof meetingToken === 'string' && meetingToken.trim()) {
@@ -912,8 +935,28 @@ function showTavusError(message) {
   dbg('⚠️ Tavus unavailable: ' + message);
 }
 
+const TAVUS_URL_FIELD_PRIORITY = [
+  'conversation_url',
+  'conversationUrl',
+  'daily_room_url',
+  'room_url',
+  'join_url',
+  'joinUrl',
+  'url'
+];
+
+function getTavusUrlSelection(data) {
+  if (!data || typeof data !== 'object') {
+    return { url: '', sourceField: '', urlFields: [] };
+  }
+
+  const urlFields = TAVUS_URL_FIELD_PRIORITY.filter(field => typeof data[field] === 'string' && data[field].trim());
+  const sourceField = urlFields[0] || '';
+  return { url: sourceField ? data[sourceField].trim() : '', sourceField, urlFields };
+}
+
 function getTavusConversationUrl(data) {
-  return data?.conversation_url || data?.conversationUrl || data?.daily_room_url || data?.room_url || data?.url || '';
+  return getTavusUrlSelection(data).url;
 }
 
 function getTavusStartError(data, fallback) {
@@ -922,7 +965,7 @@ function getTavusStartError(data, fallback) {
 
 function startTavusAsh() {
   document.getElementById('tavus-stage').classList.add('show');
-  dbg('Connecting Tavus face and voice…');
+  dbg('Opening Ash…');
 
   const reusableConversation = getStoredTavusConversationForReuse();
   if (reusableConversation === 'closing') {
@@ -955,9 +998,11 @@ function startTavusAsh() {
       throw new Error(`Tavus did not return a conversation URL. Response fields: ${fields}.`);
     }
 
+    const urlSelection = getTavusUrlSelection(data);
     console.info('Tavus conversation URL received from server:', {
       conversation_url: getSafeTavusUrlForLog(conversationUrl),
-      sourceField: data?.conversation_url ? 'conversation_url' : 'fallback'
+      sourceField: data?.conversation_url_source || urlSelection.sourceField || (data?.conversation_url ? 'conversation_url' : 'fallback'),
+      urlFields: data?.conversation_url_fields || urlSelection.urlFields || []
     });
 
     rememberTavusConversation(data, 'created');
@@ -1010,6 +1055,9 @@ window.addEventListener('beforeunload', () => cleanupTavusConversation('beforeun
 
 // Start Ash immediately. Lori introduces customers in person, so the app never asks for a name.
 document.addEventListener('DOMContentLoaded', () => {
+  if (new URLSearchParams(window.location.search).get('debug') === '1') {
+    document.body.classList.add('debug');
+  }
   startJamesHelpPolling();
   startTavusAsh();
 });

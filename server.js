@@ -608,6 +608,15 @@ function getTavusApiKey() {
 }
 
 const TAVUS_ALLOWED_PROPERTY_FIELDS = new Set(['language']);
+const TAVUS_URL_FIELD_PRIORITY = [
+  'conversation_url',
+  'conversationUrl',
+  'daily_room_url',
+  'room_url',
+  'join_url',
+  'joinUrl',
+  'url'
+];
 
 function getAllowedTavusProperties(properties = {}) {
   if (!properties || typeof properties !== 'object' || Array.isArray(properties)) {
@@ -704,6 +713,30 @@ function getValueType(value) {
   return typeof value;
 }
 
+function getTavusUrlFields(data) {
+  if (!data || typeof data !== 'object') {
+    return {};
+  }
+
+  return TAVUS_URL_FIELD_PRIORITY.reduce((fields, field) => {
+    if (typeof data[field] === 'string' && data[field].trim()) {
+      fields[field] = data[field].trim();
+    }
+    return fields;
+  }, {});
+}
+
+function getBestTavusConversationUrl(data) {
+  const urlFields = getTavusUrlFields(data);
+  for (const field of TAVUS_URL_FIELD_PRIORITY) {
+    if (urlFields[field]) {
+      return { field, url: urlFields[field], urlFields };
+    }
+  }
+
+  return { field: '', url: '', urlFields };
+}
+
 function getTavusTokenLogSummary(data) {
   if (!data || typeof data !== 'object') {
     return { present: false, type: 'undefined' };
@@ -731,10 +764,14 @@ function sanitizeTavusResponseForLog(data) {
     conversation_id: data.conversation_id || null,
     conversation_name: data.conversation_name || null,
     status: data.status || null,
+    url_fields: Object.keys(getTavusUrlFields(data)),
+    selected_url_field: getBestTavusConversationUrl(data).field || null,
     conversation_url: data.conversation_url ? 'present' : null,
     conversationUrl: data.conversationUrl ? 'present' : null,
     daily_room_url: data.daily_room_url ? 'present' : null,
     room_url: data.room_url ? 'present' : null,
+    join_url: data.join_url ? 'present' : null,
+    joinUrl: data.joinUrl ? 'present' : null,
     url: data.url ? 'present' : null,
     token: tokenSummary,
     callback_url: data.callback_url ? 'present' : null
@@ -753,14 +790,12 @@ function normalizeTavusConversationResponse(data = {}) {
   }
 
   const normalized = { ...data };
-  const conversationUrl = normalized.conversation_url
-    || normalized.conversationUrl
-    || normalized.daily_room_url
-    || normalized.room_url
-    || normalized.url;
+  const selectedUrl = getBestTavusConversationUrl(normalized);
 
-  if (conversationUrl && !normalized.conversation_url) {
-    normalized.conversation_url = conversationUrl;
+  if (selectedUrl.url) {
+    normalized.conversation_url = selectedUrl.url;
+    normalized.conversation_url_source = selectedUrl.field;
+    normalized.conversation_url_fields = Object.keys(selectedUrl.urlFields);
   }
 
   for (const tokenField of ['meeting_token', 'token']) {
@@ -826,11 +861,7 @@ async function handleTavusConversation(req, res) {
       statusCode: tavusResponse.status,
       ok: tavusResponse.ok,
       returnedFields: responseLogSummary.fields || [],
-      conversationUrlFound: Boolean(tavusResponse.data?.conversation_url
-        || tavusResponse.data?.conversationUrl
-        || tavusResponse.data?.daily_room_url
-        || tavusResponse.data?.room_url
-        || tavusResponse.data?.url),
+      conversationUrlFound: Boolean(getBestTavusConversationUrl(tavusResponse.data).url),
       token: responseLogSummary.token || { present: false, type: 'undefined' },
       response: responseLogSummary
     });
@@ -863,11 +894,15 @@ async function handleTavusConversation(req, res) {
     const normalizedData = normalizeTavusConversationResponse(tavusResponse.data);
     console.log('Tavus conversation created', {
       conversation_id: normalizedData?.conversation_id || null,
-      conversationUrlFound: Boolean(normalizedData?.conversation_url)
+      conversationUrlFound: Boolean(normalizedData?.conversation_url),
+      selected_url_field: normalizedData?.conversation_url_source || null,
+      url_fields: normalizedData?.conversation_url_fields || []
     });
     console.log('Tavus conversation ID', { conversation_id: normalizedData?.conversation_id || null });
     console.log('Tavus conversation response normalized', {
       conversationUrlFound: Boolean(normalizedData?.conversation_url),
+      selected_url_field: normalizedData?.conversation_url_source || null,
+      url_fields: normalizedData?.conversation_url_fields || [],
       returnedFields: normalizedData && typeof normalizedData === 'object' ? Object.keys(normalizedData) : [],
       token: getTavusTokenLogSummary(normalizedData)
     });
