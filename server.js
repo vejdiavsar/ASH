@@ -487,6 +487,26 @@ function getTavusApiKey() {
   return (process.env.TAVUS_API_KEY || '').trim();
 }
 
+const TAVUS_ALLOWED_PROPERTY_FIELDS = new Set(['language']);
+
+function getAllowedTavusProperties(properties = {}) {
+  if (!properties || typeof properties !== 'object' || Array.isArray(properties)) {
+    return undefined;
+  }
+
+  const allowedProperties = {};
+
+  if (
+    TAVUS_ALLOWED_PROPERTY_FIELDS.has('language')
+    && typeof properties.language === 'string'
+    && properties.language.trim()
+  ) {
+    allowedProperties.language = properties.language.trim();
+  }
+
+  return Object.keys(allowedProperties).length ? allowedProperties : undefined;
+}
+
 function buildTavusConversationPayload(body = {}, publicBaseUrl) {
   const payload = {
     replica_id: TAVUS_REPLICA_ID,
@@ -513,8 +533,9 @@ function buildTavusConversationPayload(body = {}, publicBaseUrl) {
     payload.max_participants = body.max_participants;
   }
 
-  if (typeof body.properties?.language === 'string' && body.properties.language.trim()) {
-    payload.properties = { language: body.properties.language.trim() };
+  const properties = getAllowedTavusProperties(body.properties);
+  if (properties) {
+    payload.properties = properties;
   }
 
   return payload;
